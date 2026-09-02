@@ -1,0 +1,8 @@
+Describe — the user states the problem or context in plain language.
+Share data — Nexus asks for the input files (Excel, CSV, PDF, etc.) so it can understand the columns, structure, and meaning behind the request.
+Interview — Nexus asks focused questions to fill what it doesn't know — formulas, rules, thresholds, or business logic. It asks a minimum of 3–4 and never more than 10–12 questions.
+Build live — as each answer lands, the LLM decides what it now knows and adds the right agents to the canvas in real time, connecting them into a pipeline.
+Confirm — once Nexus is confident (usually within about five questions), it summarizes the pipeline in simple terms and asks the user to confirm it's correct.
+Run — the confirmed pipeline ingests data, matches records, applies rules, and produces outputs.
+Tune or hand off — the user can open any node's config panel and edit it (synced back to the chat). If requirements were never fully captured, Nexus hands off to a human expert with a full summary.
+Review — the user sees a complete trace of what ran and why.
