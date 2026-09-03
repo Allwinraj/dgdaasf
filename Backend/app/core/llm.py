@@ -38,8 +38,34 @@ def _load_ai_models(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
 
 
-def _validate_json_schema(data: Any, schema: dict[str, Any], path: str = "$") -> None:
+def _schema_types(schema: dict[str, Any]) -> list[str]:
     expected = schema.get("type")
+    if expected is None:
+        return []
+    if isinstance(expected, list):
+        return [str(item) for item in expected]
+    return [str(expected)]
+
+
+def _validate_json_schema(data: Any, schema: dict[str, Any], path: str = "$") -> None:
+    types = _schema_types(schema)
+    if not types:
+        return
+    if data is None:
+        if "null" in types:
+            return
+        raise LLMOutputError(f"{path} expected {types[0]}")
+    candidates = [t for t in types if t != "null"]
+    if len(candidates) > 1:
+        last_error: LLMOutputError | None = None
+        for candidate in candidates:
+            try:
+                _validate_json_schema(data, {**schema, "type": candidate}, path)
+                return
+            except LLMOutputError as exc:
+                last_error = exc
+        raise last_error or LLMOutputError(f"{path} expected one of {candidates}")
+    expected = candidates[0] if candidates else types[0]
     if expected == "object":
         if not isinstance(data, dict):
             raise LLMOutputError(f"{path} expected object, got {type(data).__name__}")
@@ -65,12 +91,60 @@ def _validate_json_schema(data: Any, schema: dict[str, Any], path: str = "$") ->
         not isinstance(data, (int, float)) or isinstance(data, bool)
     ):
         raise LLMOutputError(f"{path} expected number")
-    if expected == "integer" and (not isinstance(data, int) or isinstance(data, bool)):
+    if expected == "integer" and not (
+        isinstance(data, int) and not isinstance(data, bool)
+    ):
+        if isinstance(data, float) and data.is_integer():
+            return
         raise LLMOutputError(f"{path} expected integer")
     if expected == "boolean" and not isinstance(data, bool):
         raise LLMOutputError(f"{path} expected boolean")
     if expected == "null" and data is not None:
         raise LLMOutputError(f"{path} expected null")
+
+
+def _coerce_to_schema(data: Any, schema: dict[str, Any]) -> Any:
+    types = _schema_types(schema)
+    if not types:
+        return data
+    if data is None:
+        return None
+    if "object" in types and isinstance(data, dict):
+        props = schema.get("properties") or {}
+        out: dict[str, Any] = {}
+        for key, value in data.items():
+            if key not in props:
+                out[key] = value
+                continue
+            coerced = _coerce_to_schema(value, props[key])
+            if coerced is None:
+                if key in (schema.get("required") or []):
+                    out[key] = None
+                continue
+            out[key] = coerced
+        return out
+    if "array" in types and isinstance(data, list):
+        item_schema = schema.get("items")
+        if not item_schema:
+            return data
+        return [_coerce_to_schema(item, item_schema) for item in data]
+    if "string" in types and not isinstance(data, str):
+        if isinstance(data, (int, float, bool)):
+            return str(data)
+        return None
+    if "integer" in types and isinstance(data, float) and data.is_integer():
+        return int(data)
+    if "number" in types and isinstance(data, bool):
+        return None
+    return data
+
+
+def _load_json_object(text: str, schema: dict[str, Any]) -> dict[str, Any]:
+    parsed = _coerce_to_schema(_extract_json(text), schema)
+    _validate_json_schema(parsed, schema)
+    if not isinstance(parsed, dict):
+        raise LLMOutputError("top-level JSON must be an object")
+    return parsed
 
 
 def _extract_json(text: str) -> Any:
@@ -155,11 +229,7 @@ class _RetryingMixin:
         for attempt in range(self.settings.llm_json_repair_attempts + 1):
             text = await self.complete(model_role, body, temperature)
             try:
-                parsed = _extract_json(text)
-                _validate_json_schema(parsed, schema)
-                if not isinstance(parsed, dict):
-                    raise LLMOutputError("top-level JSON must be an object")
-                return parsed
+                return _load_json_object(text, schema)
             except (json.JSONDecodeError, LLMOutputError) as exc:
                 last_error = exc
                 body = text + JSON_REPAIR_SUFFIX
@@ -264,11 +334,7 @@ class GeminiProvider(_RetryingMixin):
             try:
                 response = await self._request_with_retry(send)
                 text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
-                parsed = _extract_json(text)
-                _validate_json_schema(parsed, schema)
-                if not isinstance(parsed, dict):
-                    raise LLMOutputError("top-level JSON must be an object")
-                return parsed
+                return _load_json_object(text, schema)
             except (KeyError, IndexError, TypeError, json.JSONDecodeError, LLMOutputError) as exc:
                 last_error = exc
                 body = body + JSON_REPAIR_SUFFIX
@@ -436,11 +502,7 @@ class SAPAICoreProvider(_RetryingMixin):
             try:
                 response = await self._request_with_retry(send)
                 text = response.json()["choices"][0]["message"]["content"]
-                parsed = _extract_json(text)
-                _validate_json_schema(parsed, schema)
-                if not isinstance(parsed, dict):
-                    raise LLMOutputError("top-level JSON must be an object")
-                return parsed
+                return _load_json_object(text, schema)
             except (KeyError, IndexError, TypeError, json.JSONDecodeError, LLMOutputError) as exc:
                 last_error = exc
                 body_prompt = body_prompt + JSON_REPAIR_SUFFIX
