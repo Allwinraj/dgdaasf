@@ -1,0 +1,284 @@
+================================================================================
+JOURNEY 1 — Invoice 3-Way Matching (Procure-to-Pay)
+Manual test script for Nexus Architect
+================================================================================
+
+Purpose
+-------
+Walk the full Architect flow using augmented demo data:
+  welcome → role/industry/priorities/workflow → upload data → upload policy
+  → LLM interview → confirm → Test Run → download Excel → Save → Super Agents
+
+Prerequisites
+-------------
+1. Regenerate fixtures (if needed):
+     python augmented-data/generate.py
+
+2. Start the app:
+     python run.py
+   Backend: http://localhost:8000
+   Frontend: http://localhost:5173
+
+3. Open Architect (Create Agent) in the browser.
+
+4. Data folder:
+     augmented-data/journey-01-invoice-3way-matching/
+
+   Files to use:
+     PO_Export.xlsx          — purchase orders (38 lines, 20 columns)
+     Goods_Receipts.csv      — goods receipts (36 lines; 2 PO lines have no GR)
+     Invoices.pdf            — vendor invoices (38 lines; use PDF or Invoices.xlsx)
+     AP_Procurement_Policy_2024.pdf — match rules, tolerance, tier rules, output format
+
+Planted test cases in the data (verify after Test Run)
+------------------------------------------------------
+| Case | PO / Invoice | What to expect |
+|------|--------------|----------------|
+| Near-match tolerance | PO-24018 line 10 (Dell) | Invoice $19,280.02 vs PO $19,280.00 (+$0.02) — within MIN(2%, $50) gate |
+| Over tolerance | PO-24031 line 20 (Bosch) | Invoice $4,480 vs PO $4,280 (~4.7% over) — flagged in Exceptions |
+| Missing GR | PO-24062 line 10 | Fixture $420 invoiced, no GR — Tier-3 vendor → buyer review |
+| Missing GR | PO-24136 line 10 | Die $760 invoiced, no GR — over $500 → buyer review |
+| Partial GR | PO-24022 line 10 | Ordered 240, received 180 — qty variance path |
+| Vendor alias | PO-24018, PO-24102 | GR/invoice say "Dell Computers" vs PO "Dell Inc" — semantic match |
+| No PO/GR | INV-24-14901 (Fastenal $186) | Tier-1, under $500 unreceived rule — decision path |
+| Not yet billed | PO-24142 line 10 | GR exists, no invoice — may appear as PO-only residual |
+
+Policy PDF encodes (your answers should match this):
+  • Match keys: PO Number + PO Line Item ID
+  • Tolerance: lesser of 2% of PO line amount or USD 50 (Math node, NOT Matcher)
+  • Unreceived: auto-approve if under $500 AND Tier-1; else buyer review
+  • Output: multi-tab Excel — Summary, Matched, Exceptions (no Slack in v1)
+
+NOTE: product-feature.md Journey 1 mentions Slack alerts — that is OUT OF SCOPE for v1.
+      Do NOT ask for Slack; use Excel download only.
+
+================================================================================
+SECTION A — PRIMARY PATH (with files)
+Copy each "USER:" block into the chat. Do UI actions where noted.
+================================================================================
+
+--- Step 0: Session start ---
+[Nexus opens with AI welcome — no user input needed]
+
+--- Step 1: Role (onboarding) ---
+USER:
+I'm an Accounts Payable manager on the P2P team at a mid-market manufacturer.
+
+--- Step 2: Industry ---
+USER:
+Manufacturing — industrial components and MRO spend.
+
+--- Step 3: AI priorities ---
+USER:
+Cut manual 3-way matching, catch price and quantity variances early, and give buyers a clean exception report.
+
+--- Step 4: Workflow description ---
+USER:
+I need to match vendor invoices against purchase orders and goods receipts, flag price or quantity variances, and produce an exception report for AP and procurement.
+
+--- Step 5: Data files ---
+USER:
+Yes — I have a PO export, goods receipts, and invoices ready to upload.
+
+[UI] When the attach button appears, upload ALL THREE data files:
+  • PO_Export.xlsx
+  • Goods_Receipts.csv
+  • Invoices.pdf
+  (Invoices.xlsx is an equivalent substitute for Invoices.pdf)
+
+[CHECKPOINT] Canvas should show ingest nodes for the three data sources and a draft
+             pipeline (Matcher → Math/Decision → Output) starting to emerge.
+
+--- Step 6: Knowledge / policy ---
+USER:
+Yes — attaching our AP procurement policy.
+
+[UI] Upload:
+  • AP_Procurement_Policy_2024.pdf
+
+[CHECKPOINT] Canvas adds a Knowledge ingest node wired into Decision/Matcher context.
+
+--- Step 7: LLM interview (natural chat → pipeline design) ---
+
+WHY THIS PHASE EXISTS
+  Nexus asks like a colleague, not a form. Answer in plain business language.
+  Behind the scenes it extracts match keys, formulas, thresholds, and routing rules
+  to wire Matcher → Math → Decision → Output on the canvas.
+
+  Tip: You don't need to say "Math node" or "MIN formula" — describe the business
+  rule in your own words. Nexus should still capture the technical spec.
+
+  Nexus may ask 5–15 questions. Below are typical prompts with human-friendly replies.
+  Each reply includes what the pipeline should pick up — use this to verify the canvas.
+
+--- Q1: How do you tie a PO line to a receipt and an invoice? ---
+
+NEXUS (example):
+  "When you're matching these three files, what fields actually line up a PO line
+   with its receipt and invoice?"
+
+USER (paste this):
+  We always tie things together on the PO number and the line item ID — that's how
+  buyers, receiving, and AP all reference the same line.
+
+→ PIPELINE: Matcher (structural) keys = po_number + po_line_id
+
+--- Q2: Vendor names don't always match exactly ---
+
+NEXUS (example):
+  "I noticed vendor names can differ — like 'Dell Computers' on a receipt vs
+   'Dell Inc' on the invoice. Should I still treat those as the same vendor?"
+
+USER:
+  Yes, please. Names are messy across systems — don't fail a good match just because
+  the spelling is slightly different.
+
+→ PIPELINE: Matcher enables semantic entity normalization on vendor_name
+
+--- Q3: How much dollar difference is OK before you care? ---
+
+NEXUS (example):
+  "What size gap between the PO amount and what was invoiced is acceptable?"
+
+USER:
+  Small stuff is fine. Our policy is whichever is smaller — two percent of the PO line
+  or fifty dollars. A couple of cents of rounding shouldn't create noise, but anything
+  bigger than that should get flagged.
+
+→ PIPELINE: Math gate formula = MIN(0.02 × po_line_amount, 50.00)
+              (Matcher records the match; Math applies the tolerance)
+
+--- Q4: What if goods were never received? ---
+
+NEXUS (example):
+  "Some invoices might not have a matching goods receipt yet. How should those go?"
+
+USER:
+  It depends. If it's under five hundred dollars and the vendor is Tier-1, AP can
+  auto-approve. Everything else — higher dollar amount or not a Tier-1 vendor —
+  send to the buyer to review.
+
+→ PIPELINE: Decision agent on Matcher exceptions port
+              Rule: IF invoice_total < 500 AND vendor_tier = Tier-1 → auto-approve
+                    ELSE → buyer review
+              (Knowledge node supplies tier rules from policy PDF)
+
+--- Q5: What do you want at the end? ---
+
+NEXUS (example):
+  "How should I package the results for your team?"
+
+USER:
+  An Excel workbook works best — Summary tab, Matched tab, and Exceptions tab.
+  I'll download it from here; we don't need Slack or email alerts.
+
+→ PIPELINE: Output node → multi-tab Excel (Summary | Matched | Exceptions)
+
+--- FOLLOW-UPS (if Nexus asks) ---
+
+[Unmatched or over-tolerance rows]
+USER:
+  Anything we couldn't match, or that's past our tolerance, should land on Exceptions
+  for the buyer to work through.
+
+→ PIPELINE: Residual / exception routing → Exceptions tab
+
+[Quantity vs price]
+USER:
+  If they invoiced more than we received, flag the quantity mismatch. And if the
+  dollar gap is bigger than our two-percent-or-fifty rule, flag that too.
+
+→ PIPELINE: Qty variance check + Math tolerance gate (separate paths to Exceptions)
+
+[Ready to confirm]
+USER:
+  That looks right — let's test it.
+
+→ PIPELINE: Summary shown → enable Confirm pipeline button
+
+--- Step 8: Confirm pipeline ---
+[UI] Click "Confirm pipeline" in the chat panel when it appears.
+
+--- Step 9: Studio Test Run ---
+[UI] Click "Test Run" (top toolbar on Create Agent page).
+[UI] Wait for run to complete; open execution trace if available.
+
+[CHECKPOINT] Run should complete without error. Download the Excel artifact.
+
+Verify in output workbook:
+  • Summary tab with counts
+  • Matched tab includes PO-24018/10 near-match (+$0.02)
+  • Exceptions tab includes PO-24031/20 over-tolerance (~4.7%)
+  • Unreceived cases (PO-24062, PO-24136, Fastenal INV-24-14901) routed per tier rules
+
+--- Step 10: Save to Super Agents ---
+[UI] Click "Save".
+[UI] Open Super Agents list — saved pipeline should appear.
+
+--- Step 11: Optional — config edit + second run ---
+[UI] Change match key or tolerance on canvas config panel.
+[UI] Run Test Run again — outcome should differ and be traceable in run detail.
+
+================================================================================
+SECTION B — ALTERNATE PATH (no files — virtual ingest)
+Use this only if you want to test the data-interview / virtual-source flow.
+Do NOT upload files in this path.
+================================================================================
+
+Steps 1–4: same as Section A.
+
+--- Step 5 (no files) ---
+USER:
+I don't have files yet — I can describe what each source looks like.
+
+--- Step 5a: Describe sources (answer each follow-up Nexus asks) ---
+
+USER (PO export):
+PO export is Excel with columns po_number, po_line_id, vendor_id, vendor_name, vendor_tier,
+item_sku, qty_ordered, unit_price, line_amount, plant, and payment_terms — one row per PO line.
+
+USER (Goods receipts):
+Goods receipts CSV with gr_number, gr_date, po_number, po_line_id, vendor_name, qty_received,
+unit_price, received_amount, and warehouse — keyed to PO number and line ID.
+
+USER (Invoices):
+Invoices PDF with invoice_number, invoice_date, po_number, po_line_id, vendor_name,
+qty_invoiced, unit_price, invoice_amount, and total_amount. Vendor names sometimes differ
+from the PO (e.g. Dell Computers on invoice vs Dell Inc on PO).
+
+[CHECKPOINT] Canvas should show virtual ingest placeholders for the three sources.
+
+--- Step 6: Knowledge ---
+USER:
+No policy file right now — use standard P2P rules: 2% or $50 tolerance, Tier-1 under $500
+auto-approve on unreceived invoices, else buyer review.
+
+Then continue Section A from Step 7 (interview answers).
+
+================================================================================
+QUICK COPY LIST (Section A only — paste in order)
+================================================================================
+
+1. I'm an Accounts Payable manager on the P2P team at a mid-market manufacturer.
+2. Manufacturing — industrial components and MRO spend.
+3. Cut manual 3-way matching, catch price and quantity variances early, and give buyers a clean exception report.
+4. I need to match vendor invoices against purchase orders and goods receipts, flag price or quantity variances, and produce an exception report for AP and procurement.
+5. Yes — I have a PO export, goods receipts, and invoices ready to upload.
+   [ATTACH: PO_Export.xlsx, Goods_Receipts.csv, Invoices.pdf]
+6. Yes — attaching our AP procurement policy.
+   [ATTACH: AP_Procurement_Policy_2024.pdf]
+7. We always tie things together on the PO number and the line item ID — that's how buyers, receiving, and AP all reference the same line.
+8. Yes, please. Names are messy across systems — don't fail a good match just because the spelling is slightly different.
+9. Small stuff is fine. Our policy is whichever is smaller — two percent of the PO line or fifty dollars. A couple of cents of rounding shouldn't create noise, but anything bigger than that should get flagged.
+10. It depends. If it's under five hundred dollars and the vendor is Tier-1, AP can auto-approve. Everything else — higher dollar amount or not a Tier-1 vendor — send to the buyer to review.
+11. An Excel workbook works best — Summary tab, Matched tab, and Exceptions tab. I'll download it from here; we don't need Slack or email alerts.
+12. That looks right — let's test it.
+    [CLICK: Confirm pipeline → Test Run → download Excel → Save]
+
+================================================================================
+TERMINAL LOGS (optional)
+Watch backend console for [NEXUS] lines during the flow:
+  session.create → onboarding.llm → upload.data.done → upload.knowledge.start
+  → interview turns → confirm → run execution
+
+================================================================================

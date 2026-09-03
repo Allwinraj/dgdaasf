@@ -1,0 +1,261 @@
+JOURNEY 2 — Daily Bank Reconciliation (Record-to-Report)
+Owner review pack  ·  please confirm this flow with the team
+
+What this proves
+----------------
+Same Nexus Architect as invoice matching. Different finance process.
+No hardcoded bank-recon template — the conversation + files design the pipeline.
+
+User: Treasury analyst, retail, R2R close.
+Goal: Match bank statement to GL cash, check running balances, flag stale uncleared items, download a PDF for the controller.
+
+v1 note: download only (PDF/Excel). No Slack, email, or tickets.
+
+
+--------------------------------------------------------------------------------
+THE FLOW WE WANT THE TEAM TO SIGN OFF
+--------------------------------------------------------------------------------
+
+  1. Three general questions
+        Who are you?  →  What industry?  →  What should AI improve?
+  2. Then the use case
+        What finance workflow do you want to build today?
+  3. Input files (working data)
+        Attach bank statement + GL export  (or describe them if files are not ready)
+  4. Knowledge / policy (optional)
+        Attach Treasury SOP  — or skip
+  5. Pipeline appears on the canvas
+        Only the agents this use case needs (from the 5: Ingest, Matcher, Math, Decision, Output)
+        Live update as we talk — not a full redraw
+  6. Interview (min 5, max 12–15)
+        Human-friendly questions, based on THIS use case and the agents already on the canvas
+        User speaks in business language
+        Nexus captures keys, date window, split-deposit rule, balance formula, stale-item rule, output format
+  7. Confirm the pipeline
+  8. Test Run  →  download the report  →  Save to Super Agents
+
+If this sequence is wrong, mark it below. Do not expand v1 (no Slack / library re-run).
+
+
+--------------------------------------------------------------------------------
+HOW TO RUN THE DEMO
+--------------------------------------------------------------------------------
+
+Start:  python run.py
+Open:   Architect (Create Agent)
+Files:  augmented-data/journey-02-bank-reconciliation/
+
+        Bank_Statement_May.csv     working data
+        GL_Cash_Export.xlsx        working data
+        Treasury_Recon_SOP.pdf     knowledge / policy
+
+
+--------------------------------------------------------------------------------
+SCRIPT — paste these replies in chat (in order)
+--------------------------------------------------------------------------------
+
+WARM-UP (3 general questions)
+
+  1.  I'm a Treasury analyst on the R2R team at a retail company.
+
+  2.  Retail — multi-store POS card settlements and daily cash management.
+
+  3.  Automate daily bank recon, check running balances, and surface stale uncleared items before close.
+
+USE CASE
+
+  4.  Daily bank reconciliation. Match the bank statement to our GL cash postings, calculate running balances row by row, and flag discrepancies or stale uncleared items.
+
+INPUT FILES
+
+  5.  Yes — I have the May bank statement CSV and the GL cash export ready.
+
+      [Attach]  Bank_Statement_May.csv
+                GL_Cash_Export.xlsx
+
+      Canvas should show two data ingest nodes. A draft pipeline may start here.
+
+KNOWLEDGE / POLICY
+
+  6.  Yes — attaching our Treasury bank reconciliation SOP.
+
+      [Attach]  Treasury_Recon_SOP.pdf
+
+      Canvas should add a knowledge ingest node, wired into matching / review.
+
+INTERVIEW (Nexus asks; you answer in plain language)
+Nexus should ask about 5 questions (up to 15). Typical answers:
+
+  7.  Same dollar amount and the same reference number. The GL can post a day or two before or after the bank clears it — give me two business days of wiggle room.
+
+  8.  One deposit can cover several receipts. Match them as a group. If cash is left over, park it as unapplied and call it out.
+
+  9.  I walk the statement top to bottom: yesterday's balance, plus deposits, minus withdrawals. If my total doesn't match what the bank printed, flag that line.
+
+ 10.  Anything uncleared past thirty days is high risk. Cite the Treasury SOP so the reviewer knows why it showed up.
+
+ 11.  A PDF audit report for the controller — match summary up front, sign-off at the end. I'll download it here. No Slack.
+
+ 12.  That's the process — let's run it.
+
+CONFIRM + RUN
+
+      [Click] Confirm pipeline
+      [Click] Test Run
+      Download the report
+      [Click] Save  →  check Super Agents list
+
+OPTIONAL (universality check)
+
+      On the canvas, change the date window from 2 to 3 business days.
+      Test Run again. The result should change and the trace should show the new window.
+
+
+--------------------------------------------------------------------------------
+REAL FLOW — conversation example
+Nexus wording is what we expect. User answers are what to type.
+Canvas notes are for reviewers only — the user never says them.
+--------------------------------------------------------------------------------
+
+NEXUS:  Hi — I'm Nexus. What best describes your role?
+USER:   I'm a Treasury analyst on the R2R team at a retail company.
+
+NEXUS:  Thanks. What industry are you in today?
+USER:   Retail — multi-store POS card settlements and daily cash management.
+
+NEXUS:  If AI could take a few headaches off your plate, which ones matter most?
+USER:   Automate daily bank recon, check running balances, and surface stale
+        uncleared items before close.
+
+NEXUS:  Got it. What finance workflow should we build today?
+USER:   Daily bank reconciliation. Match the bank statement to our GL cash
+        postings, calculate running balances row by row, and flag discrepancies
+        or stale uncleared items.
+
+NEXUS:  Do you have the working files for this — bank feed and GL export?
+        You can attach them below.
+USER:   Yes — I have the May bank statement CSV and the GL cash export ready.
+        [Attach Bank_Statement_May.csv and GL_Cash_Export.xlsx]
+        --> Canvas: two data ingest nodes appear; a first draft may start.
+
+NEXUS:  Files received. Any Treasury policy or recon SOP to attach?
+USER:   Yes — attaching our Treasury bank reconciliation SOP.
+        [Attach Treasury_Recon_SOP.pdf]
+        --> Canvas: knowledge ingest added. Draft: Ingest → Matcher → Math →
+            Decision → Output (PDF), using only agents this process needs.
+
+----- Interview (about 5 questions; Nexus may ask up to 12–15) -----
+
+NEXUS:  When you line the bank feed up with the GL, what actually tells you
+        two rows are the same item?
+USER:   Same dollar amount and the same reference number. The GL can post a day
+        or two before or after the bank clears it — give me two business days
+        of wiggle room.
+        --> Canvas: Matcher keys = amount + reference; date window = 2 days.
+
+NEXUS:  Sometimes one wire hits the bank but clears several receipts in the GL.
+        How do you want those handled?
+USER:   That's normal for us — one deposit can cover several receipts. Match
+        them as a group. If cash is left over, park it as unapplied and call
+        it out.
+        --> Canvas: split / allocation matching; leftovers → exceptions.
+
+NEXUS:  How do you check that the bank's running balance column is right?
+USER:   I walk the statement top to bottom: yesterday's balance, plus deposits,
+        minus withdrawals. If my total doesn't match what the bank printed,
+        flag that line.
+        --> Canvas: Math — running balance vs stated balance; flag gaps.
+
+NEXUS:  What about checks or deposits that have been sitting uncleared?
+USER:   Anything uncleared past thirty days is high risk. Cite the Treasury SOP
+        so the reviewer knows why it showed up.
+        --> Canvas: Decision — >30 days + uncleared → high risk, SOP cited.
+
+NEXUS:  What should I hand you at the end?
+USER:   A PDF audit report for the controller — match summary up front, sign-off
+        at the end. I'll download it here. No Slack.
+        --> Canvas: Output = PDF download only.
+
+NEXUS:  Here's the draft: ingest bank and GL plus the SOP, match on amount and
+        reference with a two-day window, group split deposits, check running
+        balances, flag stale items, and produce a PDF. If this matches what
+        you need, confirm the pipeline.
+USER:   That's the process — let's run it.
+        [Click Confirm pipeline → Test Run → download PDF → Save]
+
+
+--------------------------------------------------------------------------------
+WHAT NEXUS SHOULD BUILD (without the user saying "Matcher node")
+--------------------------------------------------------------------------------
+
+
+User says                                              Pipeline should capture
+-----------------------------------------------        --------------------------------
+Same amount and reference; ±2 business days            Match on amount + reference_number
+                                                       Date window = 2 business days
+One deposit, several receipts; leftover unapplied      Split / allocation matching
+                                                       Unmatched leftovers → exceptions
+Walk balance: + deposits − withdrawals; flag gaps      Math: running balance vs stated balance
+Uncleared > 30 days; cite SOP                          Decision: stale-item rule + SOP
+PDF for the controller; download only                  Output: PDF (no Slack)
+
+
+Expected canvas (this use case)
+
+  Bank CSV  ──┐
+              ├──► Matcher ──matched──► Math (running balance) ──► Decision ──► Output (PDF)
+  GL Excel  ──┘         │                                         ▲
+                        ├── exceptions / leftovers ───────────────┘
+  Treasury SOP ─────────┴─────────────────────────────────────────┘
+
+  Ingest (data) ×2 + Ingest (knowledge) ×1 + Matcher + Math + Decision + Output
+
+  Unused agents are not added. A different use case (e.g. one spreadsheet variance) would not get Matcher or Decision.
+
+
+--------------------------------------------------------------------------------
+WHAT SUCCESS LOOKS LIKE IN THE REPORT
+--------------------------------------------------------------------------------
+
+  • Most May lines match (daily store deposits, payroll, vendors)
+  • WIRE-NEX-5510  — one bank deposit $48,500  =  three GL receipts ($20k + $18.5k + $10k)
+  • CHK-440112 $8,750 and CHK-440188 $4,120.55  — April checks, still uncleared → high risk
+  • CIT-MAY-31 $2,400  — on the GL, not yet on the bank (cash in transit)
+  • Opening collected balance 1 May: $2,450,188.42
+
+
+--------------------------------------------------------------------------------
+TEAM SIGN-OFF
+--------------------------------------------------------------------------------
+
+Please confirm or mark changes:
+
+  [ ] 1. First three questions stay general (role, industry, AI priorities)
+  [ ] 2. Fourth question is the use case
+  [ ] 3. Then working files, then optional policy
+  [ ] 4. Canvas designs from the five agents — only what this process needs
+  [ ] 5. Interview is 5 to 12–15 questions, human tone, captures formulas and thresholds
+  [ ] 6. Canvas updates live as answers come in
+  [ ] 7. Confirm → Test Run → download → Save is the close of the demo
+  [ ] 8. v1 output is file download only (no Slack / email / tickets)
+  [ ] 9. Journey 2 is a test of the engine, not a hardcoded bank-recon product
+
+Owner: __________________    Date: __________    OK / changes needed: __________
+
+
+--------------------------------------------------------------------------------
+QUICK COPY (chat only)
+--------------------------------------------------------------------------------
+
+I'm a Treasury analyst on the R2R team at a retail company.
+Retail — multi-store POS card settlements and daily cash management.
+Automate daily bank recon, check running balances, and surface stale uncleared items before close.
+Daily bank reconciliation. Match the bank statement to our GL cash postings, calculate running balances row by row, and flag discrepancies or stale uncleared items.
+Yes — I have the May bank statement CSV and the GL cash export ready.
+Yes — attaching our Treasury bank reconciliation SOP.
+Same dollar amount and the same reference number. The GL can post a day or two before or after the bank clears it — give me two business days of wiggle room.
+One deposit can cover several receipts. Match them as a group. If cash is left over, park it as unapplied and call it out.
+I walk the statement top to bottom: yesterday's balance, plus deposits, minus withdrawals. If my total doesn't match what the bank printed, flag that line.
+Anything uncleared past thirty days is high risk. Cite the Treasury SOP so the reviewer knows why it showed up.
+A PDF audit report for the controller — match summary up front, sign-off at the end. I'll download it here. No Slack.
+That's the process — let's run it.
