@@ -6,3 +6,60 @@ Confirm — once Nexus is confident (usually within about five questions), it su
 Run — the confirmed pipeline ingests data, matches records, applies rules, and produces outputs.
 Tune or hand off — the user can open any node's config panel and edit it (synced back to the chat). If requirements were never fully captured, Nexus hands off to a human expert with a full summary.
 Review — the user sees a complete trace of what ran and why.
+
+# ==============================================================================
+# NEXUS 2.0 — Environment Configuration
+# ==============================================================================
+# Switch the LLM provider with LLM_PROVIDER: "gemini" or "sap_ai_core".
+# All LLM calls route through the provider named here — no code change needed.
+# IMPORTANT: Never commit your real .env file to version control.
+# ==============================================================================
+
+LLM_PROVIDER=gemini
+
+# ------------------------------------------------------------------------------
+# Provider 1 — Gemini (Google Generative Language API)
+# ------------------------------------------------------------------------------
+GEMINI_API_KEY=AQ.
+GEMINI_MODEL=gemini-flash-lite-latest
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+
+# ------------------------------------------------------------------------------
+# Provider 2 — SAP AI Core: XSUAA OAuth2 Authentication
+# ------------------------------------------------------------------------------
+# Base URL of your XSUAA token service instance.
+XSUAA_URL=https://your-subdomain.authentication.eu10.hana.ondemand.com
+
+# OAuth2 Client Credentials (from your SAP BTP service key)
+XSUAA_CLIENT_ID=sb-your-client-id|aicore!b0000
+XSUAA_CLIENT_SECRET=your-xsuaa-client-secret-here
+
+# ------------------------------------------------------------------------------
+# SAP AI Core: Inference API Base URL & Resource Group
+# ------------------------------------------------------------------------------
+AICORE_API_URL=https://api.ai.eu10.aws.ml.hana.ondemand.com
+AICORE_RESOURCE_GROUP=default
+
+# ------------------------------------------------------------------------------
+# SAP AI Core: Model Deployment IDs (role -> deployment)
+# Used when LLM_PROVIDER=sap_ai_core. Best model per role:
+#   extraction      -> gpt-4o-mini  (fast, cost-efficient)
+#   reasoning       -> gpt-5.5      (strongest reasoning — Architect)
+#   general         -> gpt-4.1      (balanced capability)
+#   reconciliation  -> gpt-4o       (high-capability complex matching)
+# ------------------------------------------------------------------------------
+AICORE_GPT55_DEPLOYMENT_ID=dcad171471db5a4c
+AICORE_GPT40_MINI_DEPLOYMENT_ID=dfe7e04bfb45b361
+AICORE_GPT41_DEPLOYMENT_ID=d7cec98f1a47f4f3
+AICORE_GPT40_DEPLOYMENT_ID=db87ce5524bf96d9
+
+# Azure OpenAI-compatible API version used in ?api-version= query param.
+AICORE_OPENAI_API_VERSION=2024-12-01-preview
+
+# ------------------------------------------------------------------------------
+# Backend Server Configuration
+# ------------------------------------------------------------------------------
+HOST=0.0.0.0
+PORT=8000
+LOG_LEVEL=INFO
+DATA_DIR=./backend/data
