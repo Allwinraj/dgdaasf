@@ -89,10 +89,10 @@ TURN_SCHEMA: dict[str, Any] = {
             },
         },
         "ask_question": {"type": "boolean"},
-        "question": {"type": "string"},
+        "question": {"type": ["string", "null"]},
         "ready": {"type": "boolean"},
         "confidence": {"type": "number"},
-        "summary": {"type": "string"},
+        "summary": {"type": ["string", "null"]},
         "cannot_serve": {"type": "boolean"},
         "is_description": {"type": "boolean"},
     },
@@ -100,21 +100,18 @@ TURN_SCHEMA: dict[str, Any] = {
 
 ONBOARDING_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["assistant_message", "next_step"],
+    "required": ["assistant_message"],
     "properties": {
         "assistant_message": {"type": "string"},
-        "next_step": {
-            "type": "string",
-            "description": "role|industry|ai_priorities|workflow|data_prompt|data_interview|knowledge_prompt|done",
-        },
+        "next_step": {"type": ["string", "null"]},
         "upload_offer": {"type": ["string", "null"]},
         "capture": {
-            "type": "object",
+            "type": ["object", "null"],
             "properties": {
-                "role": {"type": "string"},
-                "industry": {"type": "string"},
-                "ai_priorities": {"type": "string"},
-                "description": {"type": "string"},
+                "role": {"type": ["string", "null"]},
+                "industry": {"type": ["string", "null"]},
+                "ai_priorities": {"type": ["string", "null"]},
+                "description": {"type": ["string", "null"]},
             },
         },
         "virtual_sources": {
@@ -122,15 +119,15 @@ ONBOARDING_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "label": {"type": "string"},
-                    "description": {"type": "string"},
+                    "label": {"type": ["string", "null"]},
+                    "description": {"type": ["string", "null"]},
                     "columns": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "name": {"type": "string"},
-                                "type": {"type": "string"},
+                                "name": {"type": ["string", "null"]},
+                                "type": {"type": ["string", "null"]},
                             },
                         },
                     },
@@ -140,6 +137,16 @@ ONBOARDING_SCHEMA: dict[str, Any] = {
         "requirements": TURN_SCHEMA["properties"]["requirements"],
         "capabilities": TURN_SCHEMA["properties"]["capabilities"],
     },
+}
+
+ASK: dict[str, str] = {
+    "role": WELCOME_FALLBACK,
+    "industry": "Thanks. What industry or sector are you in?",
+    "ai_priorities": "If AI could take a few headaches off your plate, which ones matter most?",
+    "workflow": "What finance workflow should we build today?",
+    "data_prompt": "Do you have working files for this? Attach them below if you do.",
+    "data_interview": "No problem — describe one data source: name, file type, and the key columns.",
+    "knowledge_prompt": "Any policy, SOP, or reference document to attach? You can skip if not.",
 }
 
 
@@ -152,15 +159,19 @@ def _ilog(session: InterviewSession | None, event: str, **fields: Any) -> None:
 
 async def bootstrap_session(storage: Storage, llm: LLMProvider) -> InterviewSession:
     session = InterviewSession(id=new_id(), status="welcome")
-    session.extra["onboarding_step"] = "start"
+    session.extra["onboarding_step"] = "role"
     _ilog(session, "session.create")
-    turn = await _llm_onboarding_turn(llm, session, user_text="", trigger="session_start")
-    _apply_onboarding_fields(session, turn)
+    try:
+        turn = await _llm_onboarding_turn(llm, session, user_text="", trigger="session_start")
+        message = str(turn.get("assistant_message") or ASK["role"])
+    except LLMError:
+        message = ASK["role"]
+        _ilog(session, "session.welcome.fallback")
     assistant = ChatMessage(
         id=new_id(),
         role="assistant",
-        content=str(turn.get("assistant_message") or WELCOME_FALLBACK),
-        meta={"kind": "welcome", "upload_offer": session.extra.get("upload_offer")},
+        content=message,
+        meta={"kind": "welcome", "upload_offer": None},
     )
     session.messages.append(assistant)
     save_session(storage, session)
@@ -234,8 +245,11 @@ async def handle_upload(
         session.extra["onboarding_step"] = "knowledge_prompt"
         session.extra["upload_offer"] = "knowledge"
         reveal = _maybe_reveal(session)
-        turn = await _llm_onboarding_turn(llm, session, note, trigger="data_uploaded")
-        _apply_onboarding_fields(session, turn)
+        try:
+            turn = await _llm_onboarding_turn(llm, session, note, trigger="data_uploaded")
+        except LLMError:
+            turn = {"assistant_message": ASK["knowledge_prompt"]}
+        _apply_onboarding_fields(session, turn, allow_step=False)
         session.extra["onboarding_step"] = "knowledge_prompt"
         session.extra["upload_offer"] = "knowledge"
         assistant = ChatMessage(
@@ -359,14 +373,29 @@ async def _handle_onboarding(
     step: str,
     user_id: str,
 ) -> dict[str, Any]:
-    turn = await _llm_onboarding_turn(llm, session, content, trigger="onboarding")
-    _apply_onboarding_fields(session, turn)
-    next_step = str(turn.get("next_step") or step)
+    try:
+        turn = await _llm_onboarding_turn(llm, session, content, trigger="onboarding")
+    except LLMError:
+        turn = {}
+        _ilog(session, "onboarding.fallback", step=step)
+    progress = _advance_onboarding(step, content)
+    _apply_onboarding_fields(session, progress)
+    _apply_onboarding_fields(session, turn, allow_step=False)
+    next_step = str(progress.get("next_step") or step)
+    session.extra["onboarding_step"] = next_step
+    if next_step == "data_prompt":
+        session.extra["upload_offer"] = "data"
+    elif next_step == "knowledge_prompt":
+        session.extra["upload_offer"] = "knowledge"
+    else:
+        session.extra.pop("upload_offer", None)
+    if not str(turn.get("assistant_message") or "").strip():
+        turn["assistant_message"] = ASK.get(next_step, "Got it.")
     _ilog(
         session,
         "onboarding.llm",
         next=next_step,
-        offer=turn.get("upload_offer"),
+        offer=session.extra.get("upload_offer"),
         virtual=len(session.extra.get("virtual_sources") or []),
     )
 
@@ -404,7 +433,12 @@ async def _handle_onboarding(
     return _response(session, assistant, reveal)
 
 
-def _apply_onboarding_fields(session: InterviewSession, turn: dict[str, Any]) -> None:
+def _apply_onboarding_fields(
+    session: InterviewSession,
+    turn: dict[str, Any],
+    *,
+    allow_step: bool = True,
+) -> None:
     for key, val in (turn.get("capture") or {}).items():
         if val:
             session.extra[key] = val
@@ -422,12 +456,12 @@ def _apply_onboarding_fields(session: InterviewSession, turn: dict[str, Any]) ->
         session.extra["virtual_sources"] = existing
         _ilog(session, "virtual.sources", count=len(existing), labels=[s.get("label") for s in existing])
     next_step = turn.get("next_step")
-    if next_step:
+    if allow_step and next_step:
         session.extra["onboarding_step"] = next_step
     offer = turn.get("upload_offer")
     if offer in {"data", "knowledge"}:
         session.extra["upload_offer"] = offer
-    elif next_step not in {"data_prompt", "knowledge_prompt"}:
+    elif allow_step and next_step not in {"data_prompt", "knowledge_prompt"}:
         session.extra.pop("upload_offer", None)
     if turn.get("capabilities"):
         session.extra["capabilities"] = {
@@ -436,6 +470,33 @@ def _apply_onboarding_fields(session: InterviewSession, turn: dict[str, Any]) ->
         }
     if turn.get("requirements"):
         _merge_requirements(session, turn["requirements"], "onboarding")
+
+
+def _advance_onboarding(step: str, user_text: str) -> dict[str, Any]:
+    text = user_text.strip()
+    if step in {"start", "role"}:
+        return {"next_step": "industry", "capture": {"role": text}, "upload_offer": None}
+    if step == "industry":
+        return {"next_step": "ai_priorities", "capture": {"industry": text}, "upload_offer": None}
+    if step == "ai_priorities":
+        return {"next_step": "workflow", "capture": {"ai_priorities": text}, "upload_offer": None}
+    if step == "workflow":
+        return {
+            "next_step": "data_prompt",
+            "capture": {"description": text},
+            "upload_offer": "data",
+        }
+    if step == "data_prompt":
+        if _is_skip(text):
+            return {"next_step": "data_interview", "upload_offer": None}
+        return {"next_step": "data_prompt", "upload_offer": "data"}
+    if step == "data_interview":
+        return {"next_step": "knowledge_prompt", "upload_offer": "knowledge"}
+    if step == "knowledge_prompt":
+        if _is_skip(text):
+            return {"next_step": "done", "upload_offer": None}
+        return {"next_step": "knowledge_prompt", "upload_offer": "knowledge"}
+    return {"next_step": step or "role"}
 
 
 def _is_skip(text: str) -> bool:
@@ -693,22 +754,14 @@ async def _llm_onboarding_turn(
         "You are Nexus, a finance pipeline co-pilot. Generate the next onboarding message from context.\n"
         "Rules:\n"
         "- Warm, human, concise. assistant_message is 1-2 short sentences max.\n"
-        "- Ask exactly ONE crisp question per turn (single line, never a paragraph).\n"
-        "- First three questions are ALWAYS general warm-up, in this order: "
-        "role → industry → ai_priorities. Do not skip them.\n"
-        "- Fourth question is the use case: what finance workflow they want to build today.\n"
-        "- Then: data_prompt → data_interview (only if user has no files) → knowledge_prompt → done.\n"
-        "- At data_prompt: ask if they have input files to attach; set upload_offer to 'data'.\n"
-        "- If user says they have NO files (no/none/don't have/not yet): set next_step to "
-        "'data_interview', clear upload_offer, and ask how ONE data source looks "
-        "(name, columns, file type). Add each described source to virtual_sources with "
-        "label, description, and columns[{name,type}]. Keep interviewing until at least one "
-        "source is clear, then move to knowledge_prompt.\n"
-        "- At knowledge_prompt: ask about policy/SOP/reference docs; upload_offer='knowledge'. "
-        "If user declines, set next_step='done'.\n"
-        "- Populate capture from the latest user answer (role, industry, ai_priorities, description).\n"
-        "- When entering done, emit initial requirements/capabilities for THIS use case only "
-        "(Matcher/Math/Decision/Output only if needed — never pad unused agents).\n"
+        "- Ask exactly ONE crisp question (single line, never a paragraph).\n"
+        "- The app owns the step order: role → industry → ai_priorities → workflow → "
+        "data_prompt → data_interview (no files) → knowledge_prompt → done. "
+        "Do not skip steps. next_step and capture are optional; omit unused capture fields "
+        "instead of sending null.\n"
+        "- At data_prompt, invite them to attach files. At knowledge_prompt, invite policy/SOP.\n"
+        "- If the user has no files, ask how ONE data source looks and fill virtual_sources.\n"
+        "- When knowledge is skipped or complete, you may emit initial requirements/capabilities.\n"
         "- Never mention 'data folder', 'knowledge folder', DAG, or agent class names.\n\n"
         f"{json.dumps(snapshot, default=str)}"
     )
