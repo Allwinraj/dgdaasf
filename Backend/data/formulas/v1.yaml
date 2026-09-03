@@ -1,0 +1,38 @@
+version: "1"
+formulas:
+  - id: variance_amount
+    description: Actual minus budget per row
+    mode: calculation
+    shape: per_row
+    output: variance_amount
+    inputs: [actual, budget]
+    ast: actual - budget
+  - id: variance_pct
+    description: Variance amount divided by budget
+    mode: calculation
+    shape: per_row
+    output: variance_pct
+    inputs: [variance_amount, budget]
+    ast: (variance_amount / budget) if budget != 0 else None
+  - id: min_pct_amount_tolerance
+    description: Flag when abs(actual - expected) exceeds min(pct * expected, amount)
+    mode: hybrid
+    shape: per_row
+    output: over_tolerance
+    inputs: [actual, expected, pct, amount]
+    ast: abs(actual - expected)
+    gate_ast: abs(actual - expected) > min(pct * expected, amount)
+  - id: running_balance
+    description: Sequential previous + deposit - withdrawal
+    mode: calculation
+    shape: sequential
+    output: running_balance
+    inputs: [deposit, withdrawal]
+    ast: previous + deposit - withdrawal
+  - id: group_sum
+    description: Sum a measure within a group
+    mode: calculation
+    shape: aggregate
+    output: group_total
+    inputs: [measure]
+    ast: sum(measure)
