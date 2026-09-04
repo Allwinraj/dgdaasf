@@ -18,12 +18,17 @@ export default function ChatPanel() {
     summary,
     libraryPipelineId,
     uploadOffer,
+    cannotServe,
+    suggestHandoff,
   } = useAgents()
   const [draft, setDraft] = useState('')
   const scroller = useRef<HTMLDivElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const showConfirm = !libraryPipelineId && (readyToConfirm || status === 'ready_to_confirm') && !confirmed
-  const showHandoff = !libraryPipelineId && (questionCount >= 12 || status === 'handoff') && status !== 'confirmed'
+  const showHandoff =
+    !libraryPipelineId &&
+    status !== 'confirmed' &&
+    (cannotServe || suggestHandoff || questionCount >= 12 || status === 'handoff')
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' })
@@ -126,7 +131,7 @@ export default function ChatPanel() {
             disabled={busy}
             className="w-full rounded-lg border border-white/20 py-2 font-label-md text-on-surface"
           >
-            Freeze for expert review
+            Connect to a Nexus expert
           </button>
         )}
         <form onSubmit={onSubmit} className="relative flex items-center">
@@ -155,8 +160,20 @@ export default function ChatPanel() {
   )
 }
 
+function fileNames(message: ChatMessage): string[] {
+  const files = message.meta?.files
+  if (!Array.isArray(files)) return []
+  return files.map((item) => {
+    if (typeof item === 'string') return item
+    if (item && typeof item === 'object' && 'name' in item) return String((item as { name: string }).name)
+    return ''
+  }).filter(Boolean)
+}
+
 function ChatBubble({ message }: { message: ChatMessage }) {
   const ai = message.role === 'assistant'
+  const attachments = fileNames(message)
+  const isUpload = message.meta?.kind === 'upload' || attachments.length > 0
   return (
     <div className={`flex gap-3 ${ai ? '' : 'flex-row-reverse'}`}>
       <div
@@ -165,7 +182,7 @@ function ChatBubble({ message }: { message: ChatMessage }) {
         }`}
       >
         <Icon
-          name={ai ? 'auto_awesome' : 'person'}
+          name={ai ? 'auto_awesome' : isUpload ? 'attach_file' : 'person'}
           className={`text-[16px] ${ai ? 'text-tertiary-fixed-dim' : 'text-on-surface'}`}
         />
       </div>
@@ -177,6 +194,19 @@ function ChatBubble({ message }: { message: ChatMessage }) {
         }`}
       >
         {message.content}
+        {attachments.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {attachments.map((name) => (
+              <span
+                key={name}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-surface-container-high px-2.5 py-1 font-label-md text-primary-fixed-dim"
+              >
+                <Icon name="description" className="text-[16px]" />
+                {name}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

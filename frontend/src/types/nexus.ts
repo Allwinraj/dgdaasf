@@ -71,8 +71,11 @@ export interface ChatResponse {
   summary: string | null
   upload_offer?: 'data' | 'knowledge' | null
   message: ChatMessage
+  user_message?: ChatMessage | null
   reveal: ProgressiveReveal | null
   pipeline: Pipeline | null
+  cannot_serve?: boolean
+  suggest_handoff?: boolean
 }
 
 export interface AgentCatalogEntry {

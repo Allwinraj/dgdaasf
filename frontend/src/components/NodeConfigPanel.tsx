@@ -194,17 +194,49 @@ export default function NodeConfigPanel({
                   <option value="hybrid">Hybrid</option>
                 </select>
               </Field>
-              <Field label="Plain English">
+              <Field label="Plain English (from chat)">
                 <textarea
                   className="field min-h-[80px]"
                   value={String(draft.formula_en ?? '')}
                   onChange={(e) => setField('formula_en', e.target.value)}
-                  placeholder="flag anything over 2% variance"
+                  placeholder="whichever is smaller — 2% of the PO line or $50"
                 />
               </Field>
               <Field label="Catalog id">
                 <input className="field" value={String(draft.catalog_id ?? '')} onChange={(e) => setField('catalog_id', e.target.value)} />
               </Field>
+              <Field label="Compiled formula (used by Math)">
+                <textarea
+                  className="field min-h-[70px] font-mono-label text-xs"
+                  value={String(draft.ast ?? '')}
+                  onChange={(e) => setField('ast', e.target.value)}
+                  placeholder="compiled from the conversation"
+                />
+              </Field>
+              {Boolean(draft.gate_ast) && (
+                <Field label="Compiled gate / flag">
+                  <textarea
+                    className="field min-h-[56px] font-mono-label text-xs"
+                    value={String(draft.gate_ast ?? '')}
+                    onChange={(e) => setField('gate_ast', e.target.value)}
+                  />
+                </Field>
+              )}
+              {draft.constants != null && (
+                <Field label="Numbers from chat">
+                  <textarea
+                    className="field min-h-[56px] font-mono-label text-xs"
+                    value={JSON.stringify(draft.constants ?? {}, null, 2)}
+                    onChange={(e) => {
+                      try {
+                        setField('constants', JSON.parse(e.target.value) as unknown)
+                      } catch {
+                        /* keep typing */
+                      }
+                    }}
+                  />
+                </Field>
+              )}
               <Field label="Shape">
                 <select className="field" value={String(draft.shape ?? 'per_row')} onChange={(e) => setField('shape', e.target.value)}>
                   <option value="per_row">per-row</option>

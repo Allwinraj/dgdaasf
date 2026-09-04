@@ -38,6 +38,8 @@ interface AgentContextValue {
   pipelineVersion: string
   catalog: AgentCatalogEntry[]
   uploadOffer: 'data' | 'knowledge' | null
+  cannotServe: boolean
+  suggestHandoff: boolean
   startSession: () => Promise<void>
   loadLibrary: (pipelineId: string) => Promise<void>
   sendMessage: (content: string) => Promise<void>
@@ -84,6 +86,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
   const [pipelineVersion, setPipelineVersion] = useState('v1')
   const [catalog, setCatalog] = useState<AgentCatalogEntry[]>([])
   const [uploadOffer, setUploadOffer] = useState<'data' | 'knowledge' | null>(null)
+  const [cannotServe, setCannotServe] = useState(false)
+  const [suggestHandoff, setSuggestHandoff] = useState(false)
 
   const createAgent = useCallback((agent: Omit<SuperAgent, 'id' | 'runs' | 'status'>) => {
     const created: SuperAgent = {
@@ -112,9 +116,15 @@ export function AgentProvider({ children }: { children: ReactNode }) {
     setQuestionCount(response.question_count)
     setSummary(response.summary)
     setUploadOffer(response.upload_offer ?? null)
+    setCannotServe(Boolean(response.cannot_serve))
+    setSuggestHandoff(Boolean(response.suggest_handoff) || response.status === 'handoff')
     setMessages((prev) => {
-      if (prev.some((m) => m.id === response.message.id)) return prev
-      return [...prev, response.message]
+      const next = [...prev]
+      const incoming = [response.user_message, response.message].filter(Boolean) as ChatMessage[]
+      for (const msg of incoming) {
+        if (!next.some((m) => m.id === msg.id)) next.push(msg)
+      }
+      return next
     })
     setPipeline((prev) => mergePipeline(prev, response.pipeline, response.reveal))
   }, [])
@@ -135,6 +145,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       setLibraryPipelineId(null)
       setSelectedNodeId(null)
       setUploadOffer(welcome.upload_offer ?? null)
+      setCannotServe(false)
+      setSuggestHandoff(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not start session')
     } finally {
@@ -297,6 +309,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       pipelineVersion,
       catalog,
       uploadOffer,
+      cannotServe,
+      suggestHandoff,
       startSession,
       loadLibrary,
       sendMessage,
@@ -330,6 +344,8 @@ export function AgentProvider({ children }: { children: ReactNode }) {
       pipelineVersion,
       catalog,
       uploadOffer,
+      cannotServe,
+      suggestHandoff,
       startSession,
       loadLibrary,
       sendMessage,
