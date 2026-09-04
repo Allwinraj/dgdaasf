@@ -47,6 +47,9 @@ export interface Pipeline {
   version: string
   nodes: PipelineNode[]
   edges: PipelineEdge[]
+  meta?: Record<string, unknown>
+  file_slots?: FileSlot[]
+  missing_files?: string[]
 }
 
 export interface ConfigPatch {
@@ -146,9 +149,18 @@ export interface RunSnapshot {
   pipeline: Pipeline | null
 }
 
+export interface FileSlot {
+  node_id: string
+  kind: 'data' | 'knowledge' | string
+  filename: string
+  label: string
+}
+
 export interface LibraryPipeline {
   id: string
   name: string
   version: string
   nodes: number
+  brief?: string | null
+  file_slots?: FileSlot[]
 }

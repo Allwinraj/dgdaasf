@@ -42,7 +42,7 @@ export default function ChatPanel() {
           <h2 className="font-label-md tracking-wider text-on-surface">Library pipeline</h2>
         </div>
         <div className="p-6 font-body-md text-on-surface-variant">
-          Loaded from Super Agents. Tune nodes on the canvas, then Test Run.
+          Loaded from Super Agents. Use Run in chat to execute with named files.
         </div>
       </aside>
     )
@@ -137,7 +137,7 @@ export default function ChatPanel() {
         <form onSubmit={onSubmit} className="relative flex items-center">
           <input
             className="w-full rounded-xl border border-white/10 bg-surface py-3 pl-4 pr-12 font-body-md text-body-md text-on-surface transition-all placeholder:text-on-surface-variant/50 focus:border-primary-fixed-dim focus:ring-1 focus:ring-primary-fixed-dim"
-            placeholder={confirmed ? 'Pipeline confirmed' : 'Reply to Nexus…'}
+            placeholder={confirmed ? 'Confirmed — Save to the library to run' : 'Reply to Nexus…'}
             aria-label="Reply to Nexus"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

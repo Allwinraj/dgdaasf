@@ -46,19 +46,25 @@ export default function SuperAgents() {
           <div className="mb-8">
             <h1 className="mb-2 font-display-lg text-display-lg text-on-surface">Super Agents Library</h1>
             <p className="font-body-lg text-body-lg text-on-surface-variant">
-              Confirmed pipelines saved from Architect. Open a card to view or tune the DAG — this list is not a production runner.
+              Agents you confirmed and saved. Open or Run to chat, attach the same file names, and get results.
             </p>
           </div>
           {error && <p className="mb-4 font-body-md text-red-300">{error}</p>}
           {pipelines.length === 0 && !error && (
-            <p className="font-body-md text-on-surface-variant">No saved pipelines yet. Confirm a draft in Architect and press Save.</p>
+            <p className="font-body-md text-on-surface-variant">
+              No saved pipelines yet. Confirm a draft in Architect and press Save.
+            </p>
           )}
           <div className="grid grid-cols-1 gap-md pb-xl md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {pipelines.map((item) => (
-              <button
+              <div
                 key={item.id}
-                type="button"
-                onClick={() => navigate(`/architect/create?pipeline=${item.id}`)}
+                role="button"
+                tabIndex={0}
+                onDoubleClick={() => navigate(`/agents/${item.id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') navigate(`/agents/${item.id}`)
+                }}
                 className="glass-card group flex flex-col rounded-xl border border-outline-variant/20 p-md text-left hover:border-primary-container/30"
               >
                 <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-lg border border-outline-variant/20 bg-surface-container">
@@ -69,8 +75,28 @@ export default function SuperAgents() {
                   {item.version}
                 </p>
                 <p className="mt-3 font-body-md text-on-surface-variant">{item.nodes} nodes</p>
-                <span className="mt-6 font-label-md text-primary-fixed-dim">Open in Architect</span>
-              </button>
+                {item.file_slots?.length ? (
+                  <p className="mt-2 font-mono-label text-[11px] text-on-surface-variant">
+                    {item.file_slots.map((s) => s.filename).join(', ')}
+                  </p>
+                ) : null}
+                <div className="mt-6 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/agents/${item.id}`)}
+                    className="rounded-lg bg-primary-container px-3 py-1.5 font-label-md text-on-primary-container"
+                  >
+                    Run
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/architect/create?pipeline=${item.id}`)}
+                    className="rounded-lg border border-white/15 px-3 py-1.5 font-label-md text-on-surface"
+                  >
+                    Canvas
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         </main>

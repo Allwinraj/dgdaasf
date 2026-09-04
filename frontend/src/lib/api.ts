@@ -1,6 +1,7 @@
 import type {
   AgentCatalogEntry,
   ChatResponse,
+  FileSlot,
   LibraryPipeline,
   Pipeline,
   RunSnapshot,
@@ -81,6 +82,24 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }),
+
+  uploadLibraryFiles: (pipelineId: string, files: FileList | File[]) => {
+    const form = new FormData()
+    for (const file of Array.from(files)) form.append('files', file)
+    return request<{ written: string[]; file_slots: FileSlot[]; missing_files: string[] }>(
+      `/pipelines/${pipelineId}/files`,
+      { method: 'POST', body: form },
+    )
+  },
+
+  runLibrary: (pipelineId: string) => request<RunView>(`/pipelines/${pipelineId}/run`, { method: 'POST' }),
+
+  askLibrary: (pipelineId: string, runId: string, question: string) =>
+    request<{ answer: string; run_id: string }>(`/pipelines/${pipelineId}/ask`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run_id: runId, question }),
     }),
 
   artifactUrl: (runId: string, name: string) => `/api/runs/${runId}/artifacts/${encodeURIComponent(name)}`,

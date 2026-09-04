@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useEffect } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import Icon from '../components/Icon'
 import IconNav from '../components/IconNav'
 import Canvas from '../components/Canvas'
@@ -10,6 +10,7 @@ import { useAgents } from '../context/AgentContext'
 import { api } from '../lib/api'
 
 export default function CreateAgent() {
+  const navigate = useNavigate()
   const [params] = useSearchParams()
   const pipelineParam = params.get('pipeline')
   const {
@@ -25,14 +26,12 @@ export default function CreateAgent() {
     selectNode,
     pipeline,
     syncNode,
-    testRun,
     saveLibrary,
     run,
     busy,
     error,
     sessionId,
   } = useAgents()
-  const [savedId, setSavedId] = useState<string | null>(null)
 
   useEffect(() => {
     if (pipelineParam) void loadLibrary(pipelineParam)
@@ -40,7 +39,6 @@ export default function CreateAgent() {
   }, [loadLibrary, pipelineParam, startSession])
 
   const selected = pipeline.nodes.find((n) => n.id === selectedNodeId) ?? null
-  const canRun = Boolean(confirmed || libraryPipelineId)
   const canSave = Boolean(confirmed && sessionId && !libraryPipelineId)
 
   return (
@@ -66,19 +64,21 @@ export default function CreateAgent() {
         </div>
         <div className="flex items-center gap-3">
           {error && <span className="max-w-xs truncate font-mono-label text-red-300">{error}</span>}
-          <button
-            disabled={!canRun || busy}
-            onClick={() => void testRun()}
-            className="flex items-center gap-2 rounded-lg border border-white/20 px-4 py-2 font-label-md text-white transition-colors hover:bg-white/5 disabled:opacity-40"
-          >
-            <Icon name="play_arrow" className="text-[18px]" />
-            Test Run
-          </button>
+          {libraryPipelineId && (
+            <button
+              type="button"
+              onClick={() => navigate(`/agents/${libraryPipelineId}`)}
+              className="flex items-center gap-2 rounded-lg border border-white/20 px-4 py-2 font-label-md text-white"
+            >
+              <Icon name="chat" className="text-[18px]" />
+              Run in chat
+            </button>
+          )}
           <button
             disabled={!canSave || busy}
             onClick={async () => {
               const saved = await saveLibrary()
-              if (saved) setSavedId(saved.id)
+              if (saved) navigate('/agents')
             }}
             className="flex items-center gap-2 rounded-lg bg-primary-container px-5 py-2 font-label-md text-on-primary-container transition-all hover:brightness-110 disabled:opacity-40"
           >
@@ -105,9 +105,6 @@ export default function CreateAgent() {
           <Link to={`/runs/${run.id}`} className="font-label-md text-on-surface hover:underline">
             Open trace
           </Link>
-          {savedId && (
-            <span className="font-mono-label text-emerald-300">Saved to library ({savedId.slice(0, 8)})</span>
-          )}
         </div>
       )}
 
