@@ -12,7 +12,7 @@ from typing import Any, Literal
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
-SUPPORTED = {".csv", ".xlsx", ".pdf"}
+SUPPORTED = {".csv", ".xlsx", ".pdf", ".txt", ".md"}
 ColumnType = Literal["string", "integer", "decimal", "date", "boolean"]
 
 _DATE_FORMATS = (
@@ -64,17 +64,24 @@ def parse_file(
         raise ParseError(f"file not found: {path}")
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED:
-        raise ParseError(f"unsupported format {suffix}; expected .xlsx, .csv, or .pdf")
+        raise ParseError(f"unsupported format {suffix}; expected .xlsx, .csv, .pdf, .txt, or .md")
     try:
         if suffix == ".csv":
             return _parse_csv(path, header_row)
         if suffix == ".xlsx":
             return _parse_xlsx(path, sheet, header_row)
+        if suffix in {".txt", ".md"}:
+            return _parse_text(path)
         return _parse_pdf(path, header_row)
     except ParseError:
         raise
     except Exception as exc:
         raise ParseError(f"malformed {suffix} file: {exc}") from exc
+
+
+def _parse_text(path: Path) -> ParseResult:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return ParseResult(path=str(path), fmt=path.suffix.lstrip("."), text=text)
 
 
 def detect_schema(rows: list[dict[str, Any]], headers: list[str]) -> list[DetectedColumn]:

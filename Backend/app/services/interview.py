@@ -14,6 +14,13 @@ from app.models.chat import ChatMessage, ConfigPatch, ExtractedRequirement, Inte
 from app.models.knowledge import KnowledgeDocument, SessionKnowledge
 from app.models.pipeline import Pipeline
 from app.services.formulas import compile_math_value
+from app.services.knowledge import (
+    chunk_text,
+    extract_facts,
+    load_knowledge,
+    save_knowledge,
+    upsert_document,
+)
 from app.services.parser import ParseError, columns_as_dicts, parse_file
 from app.services.pipeline_builder import (
     DECISION_KINDS,
@@ -231,12 +238,20 @@ async def handle_upload(
         record = await _store_upload(storage, llm, session, kind, filename, blob)
         session.uploads.append(record)
         saved.append(record)
-    note = f"Attached {len(saved)} file(s): " + ", ".join(s["name"] for s in saved)
+    names = [s["name"] for s in saved]
+    label = "reference document" if kind == "knowledge" else "working file"
+    if len(names) != 1:
+        label = "reference documents" if kind == "knowledge" else "working files"
+    note = f"Attached {label}: " + ", ".join(names)
     user = ChatMessage(
         id=new_id(),
         role="user",
         content=note,
-        meta={"kind": "upload", "files": [s["file_id"] for s in saved]},
+        meta={
+            "kind": "upload",
+            "upload_kind": kind,
+            "files": [{"name": s["name"], "file_id": s["file_id"]} for s in saved],
+        },
     )
     session.messages.append(user)
     if session.status == "welcome":
@@ -264,7 +279,7 @@ async def handle_upload(
         session.messages.append(assistant)
         save_session(storage, session)
         _ilog(session, "upload.data.done", reveal=bool(reveal), reply=assistant.content[:160])
-        result = _response(session, assistant, reveal)
+        result = _response(session, assistant, reveal, user_message=user)
         result["uploads"] = saved
         return result
 
@@ -274,11 +289,13 @@ async def handle_upload(
         _ilog(session, "upload.knowledge.start")
         turn = await _llm_turn(llm, session, note, trigger="upload")
         result = await _apply_turn(storage, llm, session, turn, user.id)
+        result["user_message"] = user.model_dump(mode="json")
         result["uploads"] = saved
         return result
 
     turn = await _llm_turn(llm, session, note, trigger="upload")
     result = await _apply_turn(storage, llm, session, turn, user.id)
+    result["user_message"] = user.model_dump(mode="json")
     result["uploads"] = saved
     return result
 
@@ -1087,6 +1104,7 @@ def _response(
     session: InterviewSession,
     message: ChatMessage,
     reveal: ProgressiveReveal | None,
+    user_message: ChatMessage | None = None,
 ) -> dict[str, Any]:
     return {
         "session_id": session.id,
@@ -1098,6 +1116,7 @@ def _response(
         "upload_offer": session.extra.get("upload_offer"),
         "cannot_serve": bool(session.extra.get("cannot_serve")),
         "suggest_handoff": bool(session.extra.get("suggest_handoff")),
+        "user_message": None if user_message is None else user_message.model_dump(mode="json"),
         "message": message.model_dump(mode="json"),
         "reveal": None if reveal is None else reveal.model_dump(mode="json"),
         "pipeline": session.pipeline,
