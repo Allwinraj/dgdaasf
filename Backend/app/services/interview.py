@@ -309,12 +309,18 @@ def confirm_session(storage: Storage, session_id: str) -> dict[str, Any]:
         raise ValueError("handoff sessions cannot be confirmed")
     session.confirmed = True
     session.status = "confirmed"
-    if not session.summary:
-        session.summary = _fallback_summary(session, pipeline)
+    brief = str(session.extra.get("pipeline_brief") or _pipeline_brief(session))
+    session.extra["pipeline_brief"] = brief
+    session.summary = brief
     assistant = ChatMessage(
         id=new_id(),
         role="assistant",
-        content=f"Confirmed. {session.summary}",
+        content=(
+            "Confirmed.\n\n"
+            f"{brief}\n\n"
+            "Next: Save this to the Super Agents library. You run it from the library "
+            "with files that use the same names (values can change)."
+        ),
         meta={"kind": "confirm"},
     )
     session.messages.append(assistant)
@@ -674,7 +680,11 @@ async def _apply_turn(
             parts.append(
                 "I skipped: " + ", ".join(str(s).replace("_", " ") for s in skipped) + "."
             )
-        parts.append("If this matches what you need, confirm the pipeline.")
+        brief = _pipeline_brief(session)
+        session.extra["pipeline_brief"] = brief
+        session.summary = brief
+        parts.append(brief)
+        parts.append("Read this through. If it matches what you need, confirm the pipeline — then Save it to the library to run it.")
     if session.extra.get("suggest_handoff") and session.status != "ready_to_confirm":
         parts.append(
             "If this is more than Nexus can finish here, connect to a Nexus expert below — "
@@ -1090,6 +1100,61 @@ def _file_id(filename: str, taken: set) -> str:
         candidate = f"{base[:36]}_{n}"
         n += 1
     return candidate
+
+
+def _explain_node(node) -> str:
+    cfg = dict(node.config or {})
+    filename = cfg.get("filename") or Path(str(cfg.get("path") or "")).name
+    if node.agent == "ingestion":
+        if (node.mode or cfg.get("mode")) == "knowledge":
+            return f"Reads the policy/reference file {filename or node.label} and keeps the rules for matching and review."
+        if cfg.get("virtual"):
+            return f"Uses the described source “{node.label}” until a real file with that shape is attached."
+        return f"Reads working file {filename or node.label} and detects its columns."
+    if node.agent == "matcher":
+        keys = cfg.get("keys") or []
+        window = cfg.get("window_days")
+        key_bit = ", ".join(str(k) for k in keys) if keys else "the fields you named"
+        extra = f" Dates may drift by {window} day(s)." if window not in (None, "") else ""
+        return f"Pairs rows that share {key_bit}.{extra} Leftovers and splits go to exceptions."
+    if node.agent == "math":
+        formula = cfg.get("formula_en") or cfg.get("catalog_id") or "the calculation from the conversation"
+        return f"Applies: {formula}."
+    if node.agent == "decision":
+        policy = cfg.get("policy") or "the review rules from the conversation"
+        return f"Flags or approves using: {policy}."
+    if node.agent == "output":
+        formats = cfg.get("formats") or []
+        if cfg.get("mode") == "pdf" or "pdf" in formats:
+            kind = "PDF"
+        elif cfg.get("mode") == "excel" or "xlsx" in formats:
+            kind = "Excel"
+        else:
+            kind = "Excel/PDF"
+        return f"Builds a {kind} report you can download."
+    return node.label or node.agent
+
+
+def _pipeline_brief(session: InterviewSession) -> str:
+    pipeline = session_pipeline(session)
+    purpose = (
+        session.extra.get("description")
+        or session.summary
+        or "this finance process"
+    )
+    lines = [
+        "Why this pipeline",
+        f"• {purpose}",
+        "",
+        "What each step does",
+    ]
+    if not pipeline.nodes:
+        lines.append("• Nothing on the canvas yet.")
+        return "\n".join(lines)
+    for i, node in enumerate(pipeline.nodes, 1):
+        title = node.label or node.id
+        lines.append(f"{i}. {title} — {_explain_node(node)}")
+    return "\n".join(lines)
 
 
 def _fallback_summary(session: InterviewSession, pipeline: Pipeline) -> str:

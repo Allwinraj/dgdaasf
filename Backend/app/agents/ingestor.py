@@ -141,13 +141,27 @@ class Ingestor:
 
 
 def _resolve_path(ctx: RunContext, config: dict[str, Any]) -> Path:
+    filename = str(config.get("filename") or "")
     raw = config.get("path") or config.get("file")
-    if not raw:
-        raise ParseError("ingestion node config is missing 'path'")
-    path = Path(raw)
-    if not path.is_absolute():
-        path = ctx.storage.path("uploads", raw)
-    return path
+    candidates: list[Path] = []
+    if raw:
+        path = Path(str(raw))
+        if not path.is_absolute():
+            path = ctx.storage.path("uploads", str(raw))
+        candidates.append(path)
+        if filename:
+            candidates.append(path.with_name(filename))
+    if filename:
+        candidates.append(ctx.storage.path("uploads", filename))
+        pipelines = ctx.storage.path("pipelines")
+        if pipelines.exists():
+            candidates.extend(pipelines.glob(f"*/files/{filename}"))
+    for path in candidates:
+        if path.exists() and path.is_file():
+            return path
+    if candidates:
+        raise ParseError(f"working file not found: {filename or raw}")
+    raise ParseError("ingestion node config is missing 'path'")
 
 
 registry.register(Ingestor)

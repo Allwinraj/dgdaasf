@@ -7,6 +7,7 @@ from app.agents.base import RunContext, registry
 from app.engine.ast_sandbox import SandboxError, eval_expr
 from app.models.envelope import Envelope
 from app.services.formulas import compile_logic
+from app.services.matching import flatten_record, get_bound
 
 _ROUND = {
     "half_up": ROUND_HALF_UP,
@@ -86,12 +87,15 @@ class MathEngine:
 
 
 def _rows(env: Envelope, ctx: RunContext) -> list[dict[str, Any]]:
+    raw: list[dict[str, Any]] = []
     if env.payload.get("rows"):
-        return [dict(r) for r in env.payload["rows"]]
-    for incoming in ctx.inputs:
-        if incoming.payload.get("rows"):
-            return [dict(r) for r in incoming.payload["rows"]]
-    return []
+        raw = [dict(r) for r in env.payload["rows"]]
+    else:
+        for incoming in ctx.inputs:
+            if incoming.payload.get("rows"):
+                raw = [dict(r) for r in incoming.payload["rows"]]
+                break
+    return [flatten_record(r) for r in raw]
 
 
 def _per_row(rows, logic, output, input_map, empty_rule, precision, rounding, mode, constants):
@@ -123,7 +127,7 @@ def _sequential(rows, logic, output, input_map, empty_rule, precision, rounding,
     out = []
     for row in rows:
         item = dict(row)
-        names = _names(item, input_map, constants)
+        names = _cash_aliases(_names(item, input_map, constants))
         names["previous"] = previous
         skipped = _apply_empty(item, names, empty_rule, output)
         if skipped:
@@ -220,7 +224,12 @@ def _names(
     names = {key: _to_dec(value) for key, value in row.items()}
     names.update(constants or {})
     for canon, source in input_map.items():
-        names[canon] = _to_dec(row.get(source))
+        names[canon] = _to_dec(row.get(source, get_bound(row, source)))
+    for canon in ("actual", "budget", "expected", "amount", "deposit", "withdrawal", "measure"):
+        if names.get(canon) is None:
+            bound = get_bound(row, canon)
+            if bound is not None:
+                names[canon] = _to_dec(bound)
     return names
 
 
@@ -242,6 +251,19 @@ def _apply_empty(item: dict[str, Any], names: dict[str, Any], empty_rule: dict, 
         item["skipped"] = True
         return True
     return False
+
+
+def _cash_aliases(names: dict[str, Any]) -> dict[str, Any]:
+    if names.get("deposit") is None and names.get("withdrawal") is None:
+        amt = names.get("amount")
+        if isinstance(amt, Decimal):
+            names["deposit"] = amt if amt >= 0 else Decimal("0")
+            names["withdrawal"] = -amt if amt < 0 else Decimal("0")
+    if names.get("deposit") is None:
+        names["deposit"] = Decimal("0")
+    if names.get("withdrawal") is None:
+        names["withdrawal"] = Decimal("0")
+    return names
 
 
 def _to_dec(value: Any) -> Any:

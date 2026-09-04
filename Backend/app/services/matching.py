@@ -41,6 +41,124 @@ def _norm(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value).strip().casefold())
 
 
+def _norm_name(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _norm(value))
+
+
+_COLUMN_ALIASES = {
+    "po": ("ponumber", "pono", "purchaseorder"),
+    "ponumber": ("po", "pono"),
+    "ref": ("reference", "referencenumber", "referenceno"),
+    "reference": ("ref", "referencenumber"),
+    "referencenumber": ("ref", "reference", "referenceno"),
+    "inv": ("invoice", "invoicenumber"),
+    "invoice": ("inv", "invoicenumber"),
+    "invoicenumber": ("invoice", "inv"),
+    "amt": ("amount",),
+    "amount": ("amt",),
+    "qty": ("quantity",),
+    "quantity": ("qty",),
+    "line": ("linenumber", "lineno"),
+    "linenumber": ("line", "lineno"),
+}
+
+
+def bind_column(row: dict[str, Any], name: str) -> str | None:
+    if not name:
+        return None
+    if name in row:
+        return name
+    want = _norm_name(name)
+    if not want:
+        return None
+    aliases = {want, *(_COLUMN_ALIASES.get(want) or ())}
+    cols = list(row.keys())
+    for col in cols:
+        if _norm(col) == _norm(name):
+            return col
+    for col in cols:
+        got = _norm_name(col)
+        if got in aliases or want in (_COLUMN_ALIASES.get(got) or ()):
+            return col
+    return None
+
+
+def get_bound(row: dict[str, Any], name: str) -> Any:
+    col = bind_column(row, name)
+    if col is None:
+        return None
+    return row.get(col)
+
+
+def flatten_record(row: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(row, dict) or "sources" not in row or not isinstance(row.get("sources"), dict):
+        return dict(row) if isinstance(row, dict) else {}
+    out = dict(row)
+    keys = row.get("keys")
+    if isinstance(keys, dict):
+        for key, val in keys.items():
+            out.setdefault(str(key), val)
+    for _sid, src in row["sources"].items():
+        if not isinstance(src, dict):
+            continue
+        for key, val in src.items():
+            out.setdefault(key, val)
+    return out
+
+
+def infer_keys(tables: list[SourceTable]) -> list[str]:
+    if not tables:
+        return []
+    shared: set[str] | None = None
+    for table in tables:
+        cols: set[str] = set()
+        for row in table.rows[:40]:
+            cols.update(str(k) for k in row.keys())
+        shared = cols if shared is None else shared & cols
+    if not shared:
+        return []
+    preferred = [
+        "po_number",
+        "po",
+        "invoice",
+        "invoice_number",
+        "reference",
+        "reference_number",
+        "line",
+        "line_number",
+        "amount",
+    ]
+    ordered = [k for k in preferred if any(_norm_name(c) == _norm_name(k) or _norm_name(c).endswith(_norm_name(k)) for c in shared)]
+    bound = []
+    seen = set()
+    for name in ordered:
+        for col in shared:
+            if col in seen:
+                continue
+            if _norm_name(col) == _norm_name(name) or _norm_name(col).endswith(_norm_name(name)):
+                bound.append(col)
+                seen.add(col)
+                break
+    if bound:
+        return bound
+    skip = {_norm_name(x) for x in ("date", "posted", "cleared", "description", "memo", "narration")}
+    return [c for c in sorted(shared) if _norm_name(c) not in skip][:4]
+
+
+def guess_date_column(tables: list[SourceTable], keys: list[str]) -> str | None:
+    key_norm = {_norm_name(k) for k in keys}
+    hints = {"date", "posted", "cleared", "valuedate", "txndate", "transactiondate"}
+    for table in tables:
+        row = table.rows[0] if table.rows else {}
+        for col in row:
+            n = _norm_name(col)
+            if n in key_norm:
+                continue
+            if n in hints or n.endswith("date"):
+                return col
+    return None
+
+
 def _dec(value: Any) -> Decimal | None:
     if value is None or value == "":
         return None
@@ -103,7 +221,7 @@ class Unified:
     variance: dict[str, Any] | None = None
 
     def as_row(self) -> dict[str, Any]:
-        return {
+        raw = {
             "status": self.status,
             "confidence": self.confidence,
             "sources": self.sources,
@@ -115,6 +233,7 @@ class Unified:
             "evidence": self.evidence,
             "variance": self.variance,
         }
+        return flatten_record(raw)
 
 
 def collect_sources(envelopes: list[Any]) -> list[SourceTable]:
@@ -144,16 +263,19 @@ def key_list(config: dict[str, Any]) -> list[str]:
 
 async def run_match(config: dict[str, Any], tables: list[SourceTable], llm) -> list[Unified]:
     mode = (config.get("mode") or "structural").lower()
+    cfg = dict(config)
+    if not key_list(cfg) and len(tables) >= 2:
+        cfg["keys"] = infer_keys(tables)
     if mode == "dedupe" or len(tables) == 1:
-        return await _dedupe(config, tables[0] if tables else SourceTable("s0", []), llm)
-    flags = dict(config.get("flags") or {})
+        return await _dedupe(cfg, tables[0] if tables else SourceTable("s0", []), llm)
+    flags = dict(cfg.get("flags") or {})
     if flags.get("allocation") or flags.get("split"):
-        return _allocate(config, tables)
+        return _allocate(cfg, tables)
     if flags.get("keyless"):
-        return await _keyless(config, tables, llm)
+        return await _keyless(cfg, tables, llm)
     if mode == "semantic":
-        return await _semantic(config, tables, llm)
-    return _structural(config, tables)
+        return await _semantic(cfg, tables, llm)
+    return _structural(cfg, tables)
 
 
 async def _dedupe(config: dict[str, Any], table: SourceTable, llm) -> list[Unified]:
@@ -165,7 +287,7 @@ async def _dedupe(config: dict[str, Any], table: SourceTable, llm) -> list[Unifi
     clusters: dict[tuple, list[int]] = defaultdict(list)
     for i, row in enumerate(table.rows):
         if keys:
-            token = tuple(_canon(row.get(k), aliases) for k in keys)
+            token = tuple(_canon(get_bound(row, k), aliases) for k in keys)
         elif semantic:
             fields = config.get("fuzzy_fields") or list(row.keys())[:3]
             token = tuple(_canon(row.get(f), aliases) for f in fields)
@@ -219,11 +341,11 @@ async def _dedupe(config: dict[str, Any], table: SourceTable, llm) -> list[Unifi
 def _structural(config: dict[str, Any], tables: list[SourceTable]) -> list[Unified]:
     keys = key_list(config)
     window = dict(config.get("window") or {})
-    window_col = window.get("column")
-    window_days = int(window.get("days") or 0)
+    window_col = window.get("column") or guess_date_column(tables, keys)
+    window_days = int(window.get("days") or config.get("window_days") or 0)
     flags = dict(config.get("flags") or {})
     aliases = dict(config.get("_aliases") or {})
-    exact_keys = [k for k in keys if k != window_col]
+    exact_keys = [k for k in keys if _norm_name(k) != _norm_name(window_col or "")]
     used: list[set[int]] = [set() for _ in tables]
     results: list[Unified] = []
 
@@ -257,7 +379,7 @@ def _structural(config: dict[str, Any], tables: list[SourceTable]) -> list[Unifi
                 if not _keys_equal(left, right, exact_keys, aliases):
                     continue
                 if window_col and window_days:
-                    d1, d2 = _date(left.get(window_col)), _date(right.get(window_col))
+                    d1, d2 = _date(get_bound(left, window_col)), _date(get_bound(right, window_col))
                     if d1 and d2 and abs((d1 - d2).days) > window_days:
                         continue
                     if d1 and d2 and d1 != d2:
@@ -282,7 +404,7 @@ def _structural(config: dict[str, Any], tables: list[SourceTable]) -> list[Unifi
                     status="unmatched",
                     confidence=0.0,
                     sources={base.source_id: left},
-                    keys={k: left.get(k) for k in keys},
+                    keys={k: get_bound(left, k) for k in keys},
                     evidence=[{"type": "unmatched", "source": base.source_id}],
                 )
             )
@@ -300,7 +422,7 @@ def _structural(config: dict[str, Any], tables: list[SourceTable]) -> list[Unifi
                 status="matched",
                 confidence=conf,
                 sources=group,
-                keys={k: left.get(k) for k in keys},
+                keys={k: get_bound(left, k) for k in keys},
                 direction=direction,
                 relationship=rel,
                 evidence=evidence or [{"type": "exact" if conf == 1 else "window", "keys": keys}],
@@ -316,7 +438,7 @@ def _structural(config: dict[str, Any], tables: list[SourceTable]) -> list[Unifi
                         status="unmatched",
                         confidence=0.0,
                         sources={table.source_id: row},
-                        keys={k: row.get(k) for k in keys},
+                        keys={k: get_bound(row, k) for k in keys},
                         evidence=[{"type": "unmatched", "source": table.source_id}],
                     )
                 )
@@ -351,11 +473,12 @@ def _keys_equal(left: dict, right: dict, keys: list[str], aliases: dict[str, str
     if not keys:
         return True
     aliases = aliases or {}
-    return all(
-        _canon(left.get(k), aliases) == _canon(right.get(k), aliases)
-        and _canon(left.get(k), aliases) != ""
-        for k in keys
-    )
+    for key in keys:
+        left_val = _canon(get_bound(left, key), aliases)
+        right_val = _canon(get_bound(right, key), aliases)
+        if not left_val or left_val != right_val:
+            return False
+    return True
 
 
 def _canon(value: Any, aliases: dict[str, str]) -> str:
@@ -426,7 +549,7 @@ def _distinct_pair(left: dict, right: dict, config: dict[str, Any]) -> bool:
 
 def _is_reversal(group: dict[str, dict], config: dict[str, Any]) -> bool:
     col = config.get("amount_column") or "amount"
-    amounts = [_dec(row.get(col)) for row in group.values()]
+    amounts = [_dec(get_bound(row, col)) for row in group.values()]
     amounts = [a for a in amounts if a is not None]
     return any(a < 0 for a in amounts)
 
@@ -434,7 +557,7 @@ def _is_reversal(group: dict[str, dict], config: dict[str, Any]) -> bool:
 def _amount_variance(group: dict[str, dict], column: str | None) -> dict[str, Any] | None:
     if not column:
         return None
-    amounts = [_dec(row.get(column)) for row in group.values()]
+    amounts = [_dec(get_bound(row, column)) for row in group.values()]
     amounts = [a for a in amounts if a is not None]
     if len(amounts) < 2:
         return None

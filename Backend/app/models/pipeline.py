@@ -41,6 +41,7 @@ class Pipeline(BaseModel):
     version: str = "0.1"
     nodes: list[Node] = Field(default_factory=list)
     edges: list[Edge] = Field(default_factory=list)
+    meta: dict[str, Any] = Field(default_factory=dict)
 
     def node_map(self) -> dict[str, Node]:
         return {node.id: node for node in self.nodes}

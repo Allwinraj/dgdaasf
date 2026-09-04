@@ -50,6 +50,7 @@ def desired_pipeline(session: InterviewSession) -> Pipeline:
                     "mode": "data",
                     "path": upload["path"],
                     "file_id": upload["file_id"],
+                    "filename": upload.get("name") or upload["file_id"],
                     "schema": upload.get("schema") or [],
                 },
                 ports=[Port(name="default")],
@@ -91,6 +92,7 @@ def desired_pipeline(session: InterviewSession) -> Pipeline:
                     "mode": "knowledge",
                     "path": upload["path"],
                     "file_id": upload["file_id"],
+                    "filename": upload.get("name") or upload["file_id"],
                     "session_id": session.id,
                 },
                 ports=[Port(name="default")],
@@ -118,6 +120,11 @@ def desired_pipeline(session: InterviewSession) -> Pipeline:
                     "keys": keys,
                     "flags": dict(match_cfg.get("flags") or {}),
                     "window_days": match_cfg.get("window_days"),
+                    "window": (
+                        {"days": int(match_cfg["window_days"])}
+                        if str(match_cfg.get("window_days") or "").strip() not in {"", "None"}
+                        else dict(match_cfg.get("window") or {})
+                    ),
                 },
                 ports=[
                     Port(name="matched"),
