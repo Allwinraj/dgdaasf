@@ -4,7 +4,7 @@ import hashlib
 import re
 from typing import Any
 
-from app.core.llm import LLMProvider
+from app.core.llm import LLMError, LLMProvider
 from app.core.storage import Storage
 from app.models.knowledge import (
     KnowledgeChunk,
@@ -125,7 +125,10 @@ async def extract_facts(
         "Each fact must cite a chunk_id from the list. Do not invent chunk ids.\n\n"
         f"{catalog}"
     )
-    payload = await llm.complete_json("extraction", prompt, FACTS_JSON_SCHEMA)
+    try:
+        payload = await llm.complete_json("extraction", prompt, FACTS_JSON_SCHEMA)
+    except LLMError:
+        return []
     facts: list[KnowledgeFact] = []
     known = {c.id for c in chunks}
     for raw in payload.get("facts") or []:

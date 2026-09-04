@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.core.llm import LLMProvider
+from app.core.llm import LLMError, LLMProvider
 from app.models.envelope import Envelope, EnvelopePort
 from app.models.knowledge import SessionKnowledge
 from app.services.knowledge import rank_chunks
@@ -145,8 +145,14 @@ async def judge_record(
         "If you use a passage, set citation.chunk_id to that chunk_id. "
         "Do not invent chunk ids."
     )
-    raw = await llm.complete_json("general", prompt, VERDICT_JSON_SCHEMA, temperature)
-    return raw
+    try:
+        return await llm.complete_json("general", prompt, VERDICT_JSON_SCHEMA, temperature)
+    except LLMError:
+        return {
+            "verdict": "flagged",
+            "confidence": 0.0,
+            "explanation": "Could not complete a model verdict for this row.",
+        }
 
 
 def enrich_record(

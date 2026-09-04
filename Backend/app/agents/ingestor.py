@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
+from app.core.llm import LLMError
 from app.agents.base import RunContext, registry
 from app.models.envelope import Envelope
 from app.models.knowledge import KnowledgeDocument, SessionKnowledge
@@ -117,7 +118,10 @@ class Ingestor:
             "Keep the same column count and order. Do not invent columns.\n"
             f"{preview}"
         )
-        result = await ctx.llm.complete_json("extraction", prompt, SCHEMA_JSON_SCHEMA)
+        try:
+            result = await ctx.llm.complete_json("extraction", prompt, SCHEMA_JSON_SCHEMA)
+        except LLMError:
+            return columns, rows
         refined = result.get("columns") or []
         if len(refined) != len(columns):
             return columns, rows

@@ -155,6 +155,17 @@ def desired_pipeline(session: InterviewSession) -> Pipeline:
             config["input_map"] = math_cfg["input_map"]
         if math_cfg.get("threshold") is not None:
             config["threshold"] = math_cfg["threshold"]
+        if math_cfg.get("gate_ast"):
+            config["gate_ast"] = math_cfg["gate_ast"]
+        constants = dict(math_cfg.get("constants") or {})
+        if math_cfg.get("threshold") is not None and "amount" not in constants:
+            constants.setdefault("amount", math_cfg["threshold"])
+        if math_cfg.get("pct") is not None:
+            constants.setdefault("pct", math_cfg["pct"])
+        if constants:
+            config["constants"] = constants
+        if math_cfg.get("compiled_from"):
+            config["compiled_from"] = math_cfg["compiled_from"]
         nodes.append(
             Node(
                 id=nid,

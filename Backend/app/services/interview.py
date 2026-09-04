@@ -13,7 +13,7 @@ from app.engine.schema_sync import propagate_schema
 from app.models.chat import ChatMessage, ConfigPatch, ExtractedRequirement, InterviewSession, ProgressiveReveal
 from app.models.knowledge import KnowledgeDocument, SessionKnowledge
 from app.models.pipeline import Pipeline
-from app.services.knowledge import chunk_text, extract_facts, load_knowledge, save_knowledge, upsert_document
+from app.services.formulas import compile_math_value
 from app.services.parser import ParseError, columns_as_dicts, parse_file
 from app.services.pipeline_builder import (
     DECISION_KINDS,
@@ -94,6 +94,9 @@ TURN_SCHEMA: dict[str, Any] = {
         "confidence": {"type": "number"},
         "summary": {"type": ["string", "null"]},
         "cannot_serve": {"type": "boolean"},
+        "cannot_serve_reason": {"type": ["string", "null"]},
+        "answer_relevant": {"type": "boolean"},
+        "skip_slot": {"type": "boolean"},
         "is_description": {"type": "boolean"},
     },
 }
@@ -209,7 +212,7 @@ async def handle_message(
     if step != "done":
         return await _handle_onboarding(storage, llm, session, content, step, user.id)
     turn = await _llm_turn(llm, session, content, trigger="message")
-    return await _apply_turn(storage, session, turn, user.id)
+    return await _apply_turn(storage, llm, session, turn, user.id)
 
 
 async def handle_upload(
@@ -270,12 +273,12 @@ async def handle_upload(
         session.extra.pop("upload_offer", None)
         _ilog(session, "upload.knowledge.start")
         turn = await _llm_turn(llm, session, note, trigger="upload")
-        result = await _apply_turn(storage, session, turn, user.id)
+        result = await _apply_turn(storage, llm, session, turn, user.id)
         result["uploads"] = saved
         return result
 
     turn = await _llm_turn(llm, session, note, trigger="upload")
-    result = await _apply_turn(storage, session, turn, user.id)
+    result = await _apply_turn(storage, llm, session, turn, user.id)
     result["uploads"] = saved
     return result
 
@@ -317,9 +320,9 @@ def handoff_session(storage: Storage, session_id: str) -> dict[str, Any]:
         id=new_id(),
         role="assistant",
         content=(
-            "I've frozen this draft for an expert to review in the product UI. "
-            "The canvas and a structured summary are saved on the session — "
-            "nothing was published to the Super Agent library.\n\n"
+            "I've connected this draft to a Nexus expert in the product UI. "
+            "The canvas and a structured summary are saved — nothing was published "
+            "to the Super Agent library.\n\n"
             f"{session.summary}"
         ),
         meta={"kind": "handoff"},
@@ -365,6 +368,22 @@ def sync_node(
     return _response(session, assistant, delta)
 
 
+async def sync_node_async(
+    storage: Storage,
+    llm: LLMProvider,
+    session_id: str,
+    node_id: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    node_cfg = dict(config)
+    if node_cfg.get("formula_en") or node_cfg.get("catalog_id"):
+        try:
+            node_cfg = await compile_math_value(node_cfg, llm)
+        except Exception:
+            _ilog(None, "math.compile.sync.failed")
+    return sync_node(storage, session_id, node_id, node_cfg)
+
+
 async def _handle_onboarding(
     storage: Storage,
     llm: LLMProvider,
@@ -403,19 +422,17 @@ async def _handle_onboarding(
         session.extra["onboarding_step"] = "done"
         session.extra.pop("upload_offer", None)
         session.status = "collecting"
-        interview = {
-            "assistant_message": str(turn.get("assistant_message") or "Let's refine the pipeline."),
-            "requirements": turn.get("requirements") or [],
-            "capabilities": turn.get("capabilities") or session.extra.get("capabilities") or {},
-            "ask_question": True,
-            "question": None,
-            "ready": False,
-            "confidence": 0.55,
-            "summary": turn.get("summary"),
-            "cannot_serve": False,
-            "is_description": True,
-        }
-        return await _apply_turn(storage, session, interview, user_id)
+        seed = str(session.extra.get("description") or content)
+        interview = await _llm_turn(llm, session, seed, trigger="onboarding_done")
+        if not interview.get("requirements") and turn.get("requirements"):
+            interview["requirements"] = turn["requirements"]
+        if not interview.get("capabilities") and turn.get("capabilities"):
+            interview["capabilities"] = turn["capabilities"]
+        interview["is_description"] = True
+        interview["cannot_serve"] = bool(interview.get("cannot_serve") or turn.get("cannot_serve"))
+        if turn.get("cannot_serve_reason") and not interview.get("cannot_serve_reason"):
+            interview["cannot_serve_reason"] = turn["cannot_serve_reason"]
+        return await _apply_turn(storage, llm, session, interview, user_id)
 
     reveal = _maybe_reveal(session)
     assistant = ChatMessage(
@@ -523,6 +540,7 @@ def _maybe_reveal(session: InterviewSession) -> ProgressiveReveal | None:
 
 async def _apply_turn(
     storage: Storage,
+    llm: LLMProvider,
     session: InterviewSession,
     turn: dict[str, Any],
     source_message_id: str,
@@ -534,16 +552,24 @@ async def _apply_turn(
         confidence=turn.get("confidence"),
         reqs=len(turn.get("requirements") or []),
     )
-    _merge_requirements(session, turn.get("requirements") or [], source_message_id)
-    if turn.get("capabilities") is not None:
+    relevant = turn.get("answer_relevant")
+    if relevant is None:
+        relevant = True
+    if relevant:
+        _merge_requirements(session, turn.get("requirements") or [], source_message_id)
+        await _hydrate_math_from_conversation(llm, session)
+    if turn.get("capabilities") is not None and relevant:
         session.extra["capabilities"] = {
             **dict(session.extra.get("capabilities") or {}),
             **turn["capabilities"],
         }
-    if turn.get("is_description") and turn.get("assistant_message"):
+    if relevant and turn.get("is_description") and turn.get("assistant_message"):
         session.extra["description"] = session.extra.get("description") or session.messages[-1].content
     if turn.get("cannot_serve"):
         session.extra["cannot_serve"] = True
+        reason = str(turn.get("cannot_serve_reason") or turn.get("summary") or "").strip()
+        session.summary = reason or session.summary or _cannot_serve_summary(session)
+        session.extra["suggest_handoff"] = True
 
     reveal = None
     if _can_draft(session):
@@ -555,33 +581,87 @@ async def _apply_turn(
             if session.status in {"welcome", "collecting"}:
                 session.status = "interview"
 
+    if session.extra.get("cannot_serve"):
+        return _finish_cannot_serve(storage, session, turn, reveal)
+
     ready_flag, question = _question_budget(session, turn)
     ack = str(turn.get("assistant_message") or "").strip()
+    pending = str(session.extra.get("pending_question") or "").strip()
+    retries = int(session.extra.get("question_retries") or 0)
     parts: list[str] = []
+
+    if pending and not relevant and not turn.get("skip_slot"):
+        if retries < 1:
+            session.extra["question_retries"] = retries + 1
+            retry_q = pending
+            if ack and not _already_asks(ack, retry_q):
+                parts.append(ack)
+            parts.append("That didn't quite answer this one — I need it to wire the canvas. Same question:")
+            parts.append(retry_q)
+            content = "\n\n".join(p for p in parts if p)
+            assistant = ChatMessage(
+                id=new_id(),
+                role="assistant",
+                content=content,
+                meta={"kind": "retry", "question_count": session.question_count},
+            )
+            session.messages.append(assistant)
+            save_session(storage, session)
+            _ilog(session, "interview.retry", retries=retries + 1)
+            return _response(session, assistant, reveal)
+        skipped = list(session.extra.get("skipped_slots") or [])
+        slot = str(session.extra.get("pending_slot") or "this detail")
+        if slot not in skipped:
+            skipped.append(slot)
+        session.extra["skipped_slots"] = skipped
+        session.extra["question_retries"] = 0
+        session.extra.pop("pending_question", None)
+        session.extra.pop("pending_slot", None)
+        if ack:
+            parts.append(ack)
+        parts.append(
+            f"I'll skip {slot.replace('_', ' ')} for now and keep building with what we have."
+        )
+        ready_flag, question = _question_budget(session, {**turn, "ask_question": True, "ready": False})
+
     if question:
         session.question_count += 1
         session.status = "interview"
+        session.extra["pending_question"] = question
+        session.extra["pending_slot"] = (_missing_slots(session) or ["next_detail"])[0]
+        session.extra["question_retries"] = 0
         if _already_asks(ack, question):
-            parts.append(ack)
+            if ack not in parts:
+                parts.append(ack)
         else:
-            if ack:
+            if ack and ack not in parts:
                 parts.append(ack)
             parts.append(question)
         if session.question_count >= MAX_QUESTIONS:
             session.extra["suggest_handoff"] = True
     elif ack:
-        parts.append(ack)
+        if ack not in parts:
+            parts.append(ack)
+        session.extra.pop("pending_question", None)
+        session.extra["question_retries"] = 0
     if turn.get("summary"):
         session.summary = str(turn["summary"])
     if ready_flag:
         session.status = "ready_to_confirm"
         session.extra["ready_to_confirm"] = True
+        session.extra.pop("pending_question", None)
         if session.summary:
             parts.append(session.summary)
+        skipped = session.extra.get("skipped_slots") or []
+        if skipped:
+            parts.append(
+                "I skipped: " + ", ".join(str(s).replace("_", " ") for s in skipped) + "."
+            )
         parts.append("If this matches what you need, confirm the pipeline.")
-    if session.extra.get("suggest_handoff"):
+    if session.extra.get("suggest_handoff") and session.status != "ready_to_confirm":
         parts.append(
-            "We've hit the interview cap. I can freeze this draft for expert review, or you can confirm if the canvas is close enough."
+            "If this is more than Nexus can finish here, connect to a Nexus expert below — "
+            "I'll pass the draft canvas and a summary of what's missing."
         )
 
     content = "\n\n".join(p for p in parts if p) or "Got it."
@@ -594,6 +674,42 @@ async def _apply_turn(
     session.messages.append(assistant)
     save_session(storage, session)
     _ilog(session, "interview.reply", status=session.status, reveal=bool(reveal), ready=ready_flag)
+    return _response(session, assistant, reveal)
+
+
+def _cannot_serve_summary(session: InterviewSession) -> str:
+    desc = session.extra.get("description") or "this process"
+    return (
+        f"Nexus v1 can ingest files, match records, run math gates, apply a decision policy, "
+        f"and export Excel/PDF. It cannot complete {desc!s} as described — for example live ERP "
+        "writes, Slack/Teams dispatch, or work outside those five agents."
+    )
+
+
+def _finish_cannot_serve(
+    storage: Storage,
+    session: InterviewSession,
+    turn: dict[str, Any],
+    reveal: ProgressiveReveal | None,
+) -> dict[str, Any]:
+    why = session.summary or _cannot_serve_summary(session)
+    session.summary = why
+    session.extra["suggest_handoff"] = True
+    ack = str(turn.get("assistant_message") or "").strip()
+    parts = [
+        ack,
+        why,
+        "Connect to a Nexus expert below and I'll freeze this draft plus a summary of why we stopped.",
+    ]
+    assistant = ChatMessage(
+        id=new_id(),
+        role="assistant",
+        content="\n\n".join(p for p in parts if p),
+        meta={"kind": "cannot_serve", "suggest_handoff": True},
+    )
+    session.messages.append(assistant)
+    save_session(storage, session)
+    _ilog(session, "interview.cannot_serve")
     return _response(session, assistant, reveal)
 
 
@@ -702,13 +818,50 @@ def _merge_requirements(
             source_message_id=source_message_id,
         )
         by_id[item.id] = item
-    session.requirements = list(by_id.values())
+        session.requirements = list(by_id.values())
+
+
+async def _hydrate_math_from_conversation(llm: LLMProvider, session: InterviewSession) -> None:
+    updated: list[ExtractedRequirement] = []
+    changed = False
+    for req in session.requirements:
+        if req.kind.lower() not in MATH_KINDS:
+            updated.append(req)
+            continue
+        try:
+            hydrated = await compile_math_value(dict(req.value or {}), llm)
+        except Exception:
+            _ilog(session, "math.compile.skip", req=req.id)
+            updated.append(req)
+            continue
+        if hydrated != dict(req.value or {}):
+            changed = True
+            _ilog(
+                session,
+                "math.compile.ok",
+                req=req.id,
+                catalog=hydrated.get("catalog_id"),
+                ast=str(hydrated.get("ast") or "")[:80],
+            )
+        updated.append(req.model_copy(update={"value": hydrated}))
+    if changed:
+        session.requirements = updated
+        overrides = dict(session.extra.get("node_overrides") or {})
+        math_ids = [
+            n.id for n in session_pipeline(session).nodes if n.agent == "math"
+        ] or ["math"]
+        math_vals = [r.value for r in updated if r.kind.lower() in MATH_KINDS]
+        for i, nid in enumerate(math_ids):
+            cfg = math_vals[i] if i < len(math_vals) else (math_vals[-1] if math_vals else {})
+            overrides[nid] = {**dict(overrides.get(nid) or {}), **cfg}
+        session.extra["node_overrides"] = overrides
 
 
 def _conversation_snapshot(session: InterviewSession, user_text: str, trigger: str) -> dict[str, Any]:
     pipeline = session_pipeline(session)
     return {
         "trigger": trigger,
+        "user_text": user_text,
         "onboarding_step": session.extra.get("onboarding_step"),
         "status": session.status,
         "question_count": session.question_count,
@@ -730,13 +883,41 @@ def _conversation_snapshot(session: InterviewSession, user_text: str, trigger: s
         "capabilities": session.extra.get("capabilities"),
         "missing_slots": _missing_slots(session),
         "pipeline": {
-            "nodes": [{"id": n.id, "agent": n.agent, "mode": n.mode, "label": n.label} for n in pipeline.nodes],
+            "nodes": [
+                {
+                    "id": n.id,
+                    "agent": n.agent,
+                    "mode": n.mode,
+                    "label": n.label,
+                    "config": {
+                        k: n.config.get(k)
+                        for k in (
+                            "keys",
+                            "window_days",
+                            "flags",
+                            "formula_en",
+                            "catalog_id",
+                            "ast",
+                            "gate_ast",
+                            "shape",
+                            "constants",
+                            "policy",
+                            "formats",
+                            "title",
+                        )
+                        if k in n.config
+                    },
+                }
+                for n in pipeline.nodes
+            ],
             "edges": [
                 {"source": e.source, "source_port": e.source_port, "target": e.target}
                 for e in pipeline.edges
             ],
         },
-        "user_text": user_text,
+        "skipped_slots": session.extra.get("skipped_slots") or [],
+        "pending_question": session.extra.get("pending_question"),
+        "question_retries": session.extra.get("question_retries") or 0,
         "min_questions": MIN_QUESTIONS,
         "max_questions": MAX_QUESTIONS,
     }
@@ -791,13 +972,22 @@ async def _llm_turn(
         "in plain words (e.g. '2% or $50, whichever is smaller'). If Decision is on the canvas, "
         "ask who reviews exceptions and any auto-approve rules. If Output is on the canvas, "
         "ask Excel vs PDF. Skip agents that are not in the pipeline.\n"
-        "Fill missing_slots first. Minimum 5 questions, typically 5–8, hard cap 15. "
-        "Do not set ready true before min_questions. After that, ready when keys, formula, "
-        "routing, and output format are captured.\n"
+        "Fill missing_slots first. After each useful answer, update requirements so the "
+        "canvas builds in parallel (keys, formula_en, policy, output format).\n"
+        "If the user's reply does not answer the pending_question, set answer_relevant false "
+        "and do not invent requirements from that reply. We will ask the same question once more. "
+        "If they still dodge it, we skip that slot and keep building with what we have.\n"
+        "If the process needs live ERP writes, Slack/email dispatch, or anything outside "
+        "Ingest / Matcher / Math / Decision / Excel-PDF Output, set cannot_serve true and "
+        "cannot_serve_reason to a short plain-language summary of why Nexus v1 cannot finish it.\n"
         "Emit requirements with kinds match|math|decision|output|excel|pdf. "
         "For match: value.keys, mode, window_days, flags.allocation. "
-        "For math: value.formula_en and threshold or catalog_id (never invent column names "
-        "that are not in the uploaded schemas). "
+        "For math: copy the user's words into value.formula_en. Also set "
+        "value.constants for numbers they said (pct 0.02 for 2%, amount 50 for $50), "
+        "value.catalog_id when it clearly matches running_balance / min_pct_amount_tolerance / "
+        "variance_pct / variance_amount / group_sum, value.shape sequential for running balances, "
+        "value.mode hybrid when they want a flag/gate, and value.input_map from uploaded column names. "
+        "The app compiles formula_en into ast and writes it onto the Math node config. "
         "For decision: value.policy in one sentence. "
         "For output: value.formats ['xlsx'] and/or ['pdf'].\n"
         "Set capabilities from THIS process only. Never insert Matcher, Math, or Decision "
@@ -906,6 +1096,8 @@ def _response(
         "ready_to_confirm": session.status == "ready_to_confirm" or session.confirmed,
         "summary": session.summary,
         "upload_offer": session.extra.get("upload_offer"),
+        "cannot_serve": bool(session.extra.get("cannot_serve")),
+        "suggest_handoff": bool(session.extra.get("suggest_handoff")),
         "message": message.model_dump(mode="json"),
         "reveal": None if reveal is None else reveal.model_dump(mode="json"),
         "pipeline": session.pipeline,

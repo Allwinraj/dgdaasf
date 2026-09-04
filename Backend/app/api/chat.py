@@ -12,7 +12,7 @@ from app.services.interview import (
     handle_message,
     handle_upload,
     handoff_session,
-    sync_node,
+    sync_node_async,
 )
 from app.services.parser import ParseError
 from app.services.sessions import load_session
@@ -115,9 +115,13 @@ def post_handoff(body: HandoffBody, storage: Storage = Depends(get_storage)) -> 
 
 
 @router.post("/sync-node")
-def post_sync_node(body: SyncNodeBody, storage: Storage = Depends(get_storage)) -> dict:
+async def post_sync_node(
+    body: SyncNodeBody,
+    storage: Storage = Depends(get_storage),
+    llm: LLMProvider = Depends(get_llm),
+) -> dict:
     _session_or_404(storage, body.session_id)
     try:
-        return sync_node(storage, body.session_id, body.node_id, body.config)
+        return await sync_node_async(storage, llm, body.session_id, body.node_id, body.config)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=f"node not found: {body.node_id}") from exc

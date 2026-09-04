@@ -103,39 +103,77 @@ def _validate_json_schema(data: Any, schema: dict[str, Any], path: str = "$") ->
         raise LLMOutputError(f"{path} expected null")
 
 
+def _default_for_schema(schema: dict[str, Any] | None) -> Any:
+    types = _schema_types(schema or {})
+    if "array" in types:
+        return []
+    if "object" in types:
+        return {}
+    if "string" in types:
+        return ""
+    if "integer" in types:
+        return 0
+    if "number" in types:
+        return 0.0
+    if "boolean" in types:
+        return False
+    return None
+
+
 def _coerce_to_schema(data: Any, schema: dict[str, Any]) -> Any:
     types = _schema_types(schema)
     if not types:
         return data
-    if data is None:
-        return None
-    if "object" in types and isinstance(data, dict):
+    if "object" in types and isinstance(data, list):
+        required = schema.get("required") or []
         props = schema.get("properties") or {}
+        if len(required) == 1 and "array" in _schema_types(props.get(required[0]) or {}):
+            data = {required[0]: data}
+    if "object" in types:
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            return _default_for_schema(schema)
+        props = schema.get("properties") or {}
+        required = list(schema.get("required") or [])
         out: dict[str, Any] = {}
-        for key, value in data.items():
-            if key not in props:
-                out[key] = value
+        keys = set(data) | set(required)
+        for key in keys:
+            sub = props.get(key) or {}
+            if key in data:
+                coerced = _coerce_to_schema(data[key], sub) if sub else data[key]
+            else:
+                coerced = _default_for_schema(sub)
+            if coerced is None and key not in required:
                 continue
-            coerced = _coerce_to_schema(value, props[key])
-            if coerced is None:
-                if key in (schema.get("required") or []):
-                    out[key] = None
-                continue
+            if coerced is None and key in required:
+                coerced = _default_for_schema(sub)
             out[key] = coerced
         return out
-    if "array" in types and isinstance(data, list):
+    if "array" in types:
+        if data is None:
+            return []
+        if not isinstance(data, list):
+            data = [data]
         item_schema = schema.get("items")
         if not item_schema:
             return data
-        return [_coerce_to_schema(item, item_schema) for item in data]
+        cleaned = []
+        for item in data:
+            coerced = _coerce_to_schema(item, item_schema)
+            if coerced is not None:
+                cleaned.append(coerced)
+        return cleaned
+    if data is None:
+        return _default_for_schema(schema)
     if "string" in types and not isinstance(data, str):
         if isinstance(data, (int, float, bool)):
             return str(data)
-        return None
+        return _default_for_schema(schema)
     if "integer" in types and isinstance(data, float) and data.is_integer():
         return int(data)
     if "number" in types and isinstance(data, bool):
-        return None
+        return 0.0
     return data
 
 

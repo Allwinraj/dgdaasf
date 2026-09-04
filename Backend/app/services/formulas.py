@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from app.core.llm import LLMError
 from app.core.settings import BACKEND_ROOT
 from app.engine.ast_sandbox import validate_expr
 
@@ -92,16 +93,20 @@ async def compile_logic(config: dict[str, Any], llm) -> CompiledLogic:
         )
     catalog_id = config.get("catalog_id")
     if catalog_id:
-        item = catalog.get(catalog_id)
-        return CompiledLogic(
-            catalog_id=item.id,
-            ast=item.ast,
-            gate_ast=item.gate_ast,
-            shape=config.get("shape") or item.shape,
-            mode=config.get("mode") or item.mode,
-            output=config.get("output_column") or item.output,
-            inputs=item.inputs,
-        )
+        try:
+            item = catalog.get(str(catalog_id))
+        except KeyError:
+            item = None
+        if item:
+            return CompiledLogic(
+                catalog_id=item.id,
+                ast=item.ast,
+                gate_ast=item.gate_ast,
+                shape=config.get("shape") or item.shape,
+                mode=config.get("mode") or item.mode,
+                output=config.get("output_column") or item.output,
+                inputs=item.inputs,
+            )
     english = config.get("formula_en") or config.get("formula")
     if not english:
         raise ValueError("math node needs catalog_id, ast, or formula_en")
@@ -113,7 +118,10 @@ async def compile_logic(config: dict[str, Any], llm) -> CompiledLogic:
         "withdrawal, previous, measure, variance_amount when they fit.\n"
         f"Formula: {english}"
     )
-    payload = await llm.complete_json("reasoning", prompt, COMPILE_SCHEMA)
+    try:
+        payload = await llm.complete_json("reasoning", prompt, COMPILE_SCHEMA)
+    except LLMError as exc:
+        raise ValueError(f"could not compile formula: {exc}") from exc
     cid = (payload.get("catalog_id") or "").strip()
     if cid and cid in catalog.ids():
         item = catalog.get(cid)
@@ -140,3 +148,32 @@ async def compile_logic(config: dict[str, Any], llm) -> CompiledLogic:
         output=payload.get("output") or config.get("output_column") or "result",
         inputs=list(config.get("inputs") or []),
     )
+
+
+def logic_to_config(value: dict[str, Any], logic: CompiledLogic) -> dict[str, Any]:
+    out = dict(value)
+    if logic.catalog_id:
+        out["catalog_id"] = logic.catalog_id
+    out["ast"] = logic.ast
+    if logic.gate_ast:
+        out["gate_ast"] = logic.gate_ast
+    out["shape"] = logic.shape or out.get("shape") or "per_row"
+    out["mode"] = logic.mode or out.get("mode") or "calculation"
+    out["output_column"] = logic.output or out.get("output_column") or "result"
+    source = str(out.get("formula_en") or out.get("catalog_id") or out.get("ast") or "")
+    out["compiled_from"] = source
+    return out
+
+
+async def compile_math_value(value: dict[str, Any], llm) -> dict[str, Any]:
+    source = str(value.get("formula_en") or value.get("catalog_id") or value.get("ast") or "")
+    if not source:
+        return value
+    if value.get("compiled_from") == source and value.get("ast"):
+        return value
+    cfg = dict(value)
+    if value.get("formula_en") and value.get("compiled_from") != source:
+        cfg.pop("ast", None)
+        cfg.pop("gate_ast", None)
+    logic = await compile_logic(cfg, llm)
+    return logic_to_config(value, logic)
