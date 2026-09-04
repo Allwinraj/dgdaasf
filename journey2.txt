@@ -1,5 +1,5 @@
 JOURNEY 2 — Daily Bank Reconciliation (Record-to-Report)
-Owner review pack  ·  please confirm this flow with the team
+Owner review pack  ·  try this in Architect; mark anything that does not match
 
 What this proves
 ----------------
@@ -9,7 +9,7 @@ No hardcoded bank-recon template — the conversation + files design the pipelin
 User: Treasury analyst, retail, R2R close.
 Goal: Match bank statement to GL cash, check running balances, flag stale uncleared items, download a PDF for the controller.
 
-v1 note: download only (PDF/Excel). No Slack, email, or tickets.
+v1 note: download only (PDF/Excel). No Slack, email, ERP write-back, or tickets.
 
 
 --------------------------------------------------------------------------------
@@ -23,14 +23,18 @@ THE FLOW WE WANT THE TEAM TO SIGN OFF
   3. Input files (working data)
         Attach bank statement + GL export  (or describe them if files are not ready)
   4. Knowledge / policy (optional)
-        Attach Treasury SOP  — or skip
-  5. Pipeline appears on the canvas
+        Attach Treasury SOP  — or type none / skip
+  5. Pipeline appears and keeps updating
         Only the agents this use case needs (from the 5: Ingest, Matcher, Math, Decision, Output)
-        Live update as we talk — not a full redraw
+        After files (and SOP), a first draft should already be on the canvas
+        Each useful interview answer is captured and wired in live — not a full redraw
   6. Interview (min 5, max 12–15)
         Human-friendly questions, based on THIS use case and the agents already on the canvas
         User speaks in business language
         Nexus captures keys, date window, split-deposit rule, balance formula, stale-item rule, output format
+        Off-topic answer → same question once more → still off-topic → skip that slot and keep building
+        If the process needs ERP writes / Slack / anything outside the five agents →
+        Nexus explains why it cannot finish and offers Connect to a Nexus expert
   7. Confirm the pipeline
   8. Test Run  →  download the report  →  Save to Super Agents
 
@@ -46,12 +50,13 @@ Open:   Architect (Create Agent)
 Files:  augmented-data/journey-02-bank-reconciliation/
 
         Bank_Statement_May.csv     working data
-        GL_Cash_Export.xlsx        working data
+        GL_Cash_Export.xlsx        working data (add if missing from the folder)
         Treasury_Recon_SOP.pdf     knowledge / policy
 
 
 --------------------------------------------------------------------------------
 SCRIPT — paste these replies in chat (in order)
+Happy path first. Optional branches are after the main interview.
 --------------------------------------------------------------------------------
 
 WARM-UP (3 general questions)
@@ -73,7 +78,7 @@ INPUT FILES
       [Attach]  Bank_Statement_May.csv
                 GL_Cash_Export.xlsx
 
-      Canvas should show two data ingest nodes. A draft pipeline may start here.
+      Canvas should show two data ingest nodes. A first draft of the rest of the pipeline may already start.
 
 KNOWLEDGE / POLICY
 
@@ -81,10 +86,13 @@ KNOWLEDGE / POLICY
 
       [Attach]  Treasury_Recon_SOP.pdf
 
+      (Or type: none  — if you skip, the canvas still builds from the files + conversation.)
+
       Canvas should add a knowledge ingest node, wired into matching / review.
+      After this, interview questions begin and the canvas keeps filling in.
 
 INTERVIEW (Nexus asks; you answer in plain language)
-Nexus should ask about 5 questions (up to 15). Typical answers:
+Nexus should ask about 5 questions (up to 15). Typical answers — wait for Nexus, then paste:
 
   7.  Same dollar amount and the same reference number. The GL can post a day or two before or after the bank clears it — give me two business days of wiggle room.
 
@@ -98,6 +106,8 @@ Nexus should ask about 5 questions (up to 15). Typical answers:
 
  12.  That's the process — let's run it.
 
+      When Nexus says the draft matches, click Confirm pipeline (do not only type this if the Confirm button is showing).
+
 CONFIRM + RUN
 
       [Click] Confirm pipeline
@@ -105,46 +115,64 @@ CONFIRM + RUN
       Download the report
       [Click] Save  →  check Super Agents list
 
+OPTIONAL — off-topic retry then skip (try on any interview question)
+
+      After Nexus asks a question, type:  I want pizza
+      Expect: same question again ("That didn't quite answer this one… Same question:")
+      Type again:  still pizza
+      Expect: Nexus skips that detail and keeps building with what it has.
+      Then answer the next real question from 7–11.
+
+OPTIONAL — cannot finish / expert (do this in a NEW session, not the happy path)
+
+      After the pipeline is on the canvas, type:
+      Post every result back into SAP as a live posting and ping Slack.
+      Expect: a short summary of why v1 cannot do ERP writes or live Slack,
+      plus the button  Connect to a Nexus expert
+
 OPTIONAL (universality check)
 
       On the canvas, change the date window from 2 to 3 business days.
+      Click a Math node — you should see the running-balance wording compiled onto the node.
       Test Run again. The result should change and the trace should show the new window.
 
 
 --------------------------------------------------------------------------------
 REAL FLOW — conversation example
-Nexus wording is what we expect. User answers are what to type.
-Canvas notes are for reviewers only — the user never says them.
+Nexus wording is close to product copy (LLM may paraphrase). Type the USER lines.
+Canvas notes are for you only — do not type them.
 --------------------------------------------------------------------------------
 
 NEXUS:  Hi — I'm Nexus. What best describes your role?
 USER:   I'm a Treasury analyst on the R2R team at a retail company.
 
-NEXUS:  Thanks. What industry are you in today?
+NEXUS:  Thanks. What industry or sector are you in?
 USER:   Retail — multi-store POS card settlements and daily cash management.
 
 NEXUS:  If AI could take a few headaches off your plate, which ones matter most?
 USER:   Automate daily bank recon, check running balances, and surface stale
         uncleared items before close.
 
-NEXUS:  Got it. What finance workflow should we build today?
+NEXUS:  What finance workflow should we build today?
 USER:   Daily bank reconciliation. Match the bank statement to our GL cash
         postings, calculate running balances row by row, and flag discrepancies
         or stale uncleared items.
 
-NEXUS:  Do you have the working files for this — bank feed and GL export?
-        You can attach them below.
+NEXUS:  Do you have working files for this? Attach them below if you do.
 USER:   Yes — I have the May bank statement CSV and the GL cash export ready.
         [Attach Bank_Statement_May.csv and GL_Cash_Export.xlsx]
-        --> Canvas: two data ingest nodes appear; a first draft may start.
+        --> Canvas: two data ingest nodes. First draft of Matcher / Math /
+            Decision / Output may already appear from the use case + files.
 
-NEXUS:  Files received. Any Treasury policy or recon SOP to attach?
+NEXUS:  Any policy, SOP, or reference document to attach? You can skip if not.
 USER:   Yes — attaching our Treasury bank reconciliation SOP.
         [Attach Treasury_Recon_SOP.pdf]
-        --> Canvas: knowledge ingest added. Draft: Ingest → Matcher → Math →
-            Decision → Output (PDF), using only agents this process needs.
+        --> Canvas: knowledge ingest added, wired to matching / review.
+            Pipeline keeps building in parallel with the interview.
 
 ----- Interview (about 5 questions; Nexus may ask up to 12–15) -----
+Nexus asks ONE question at a time. Answer that question. The canvas should
+update after each useful answer (keys, formula, stale rule, PDF).
 
 NEXUS:  When you line the bank feed up with the GL, what actually tells you
         two rows are the same item?
@@ -165,29 +193,51 @@ USER:   I walk the statement top to bottom: yesterday's balance, plus deposits,
         minus withdrawals. If my total doesn't match what the bank printed,
         flag that line.
         --> Canvas: Math — running balance vs stated balance; flag gaps.
+            Click the Math node: formula_en / compiled ast should show this.
 
 NEXUS:  What about checks or deposits that have been sitting uncleared?
 USER:   Anything uncleared past thirty days is high risk. Cite the Treasury SOP
         so the reviewer knows why it showed up.
         --> Canvas: Decision — >30 days + uncleared → high risk, SOP cited.
 
-NEXUS:  What should I hand you at the end?
+NEXUS:  What should I hand you at the end — Excel, PDF, or both?
 USER:   A PDF audit report for the controller — match summary up front, sign-off
         at the end. I'll download it here. No Slack.
         --> Canvas: Output = PDF download only.
 
 NEXUS:  Here's the draft: ingest bank and GL plus the SOP, match on amount and
         reference with a two-day window, group split deposits, check running
-        balances, flag stale items, and produce a PDF. If this matches what
-        you need, confirm the pipeline.
-USER:   That's the process — let's run it.
-        [Click Confirm pipeline → Test Run → download PDF → Save]
+        balances, flag stale items, and produce a PDF.
+        If this matches what you need, confirm the pipeline.
+USER:   [Click Confirm pipeline]
+        [Click Test Run → download PDF → Save]
+
+----- Optional: same question, then skip (you can insert this on any ask) -----
+
+NEXUS:  (any pending interview question)
+USER:   I want pizza
+NEXUS:  That didn't quite answer this one — I need it to wire the canvas.
+        Same question:
+        (repeats the question — question count does not go up)
+USER:   still pizza
+NEXUS:  I'll skip this detail for now and keep building with what we have.
+        (then the next needed question)
+        --> Canvas: still the pipeline from useful answers; skipped slot listed
+            later if Nexus is ready to confirm.
+
+----- Optional: out of capability (new session after files are on the canvas) -----
+
+USER:   Post every result back into SAP as a live posting and ping Slack.
+NEXUS:  (summary: v1 can ingest, match, run math, decide, export Excel/PDF —
+        it cannot live-post to ERP or send Slack)
+        Connect to a Nexus expert below and I'll freeze this draft plus a
+        summary of why we stopped.
+USER:   [Click] Connect to a Nexus expert
 
 
 --------------------------------------------------------------------------------
 WHAT NEXUS SHOULD BUILD (without the user saying "Matcher node")
 --------------------------------------------------------------------------------
-
 
 User says                                              Pipeline should capture
 -----------------------------------------------        --------------------------------
@@ -198,6 +248,9 @@ One deposit, several receipts; leftover unapplied      Split / allocation matchi
 Walk balance: + deposits − withdrawals; flag gaps      Math: running balance vs stated balance
 Uncleared > 30 days; cite SOP                          Decision: stale-item rule + SOP
 PDF for the controller; download only                  Output: PDF (no Slack)
+I want pizza (twice)                                   Re-ask once, then skip; do not
+                                                       overwrite keys/formula from junk
+Live SAP posting + Slack                               cannot_serve + expert handoff
 
 
 Expected canvas (this use case)
@@ -234,17 +287,20 @@ Please confirm or mark changes:
   [ ] 2. Fourth question is the use case
   [ ] 3. Then working files, then optional policy
   [ ] 4. Canvas designs from the five agents — only what this process needs
-  [ ] 5. Interview is 5 to 12–15 questions, human tone, captures formulas and thresholds
-  [ ] 6. Canvas updates live as answers come in
-  [ ] 7. Confirm → Test Run → download → Save is the close of the demo
-  [ ] 8. v1 output is file download only (no Slack / email / tickets)
-  [ ] 9. Journey 2 is a test of the engine, not a hardcoded bank-recon product
+  [ ] 5. Draft appears as soon as files + use case exist; interview fills it in live
+  [ ] 6. Interview is 5 to 12–15 questions, human tone, captures formulas and thresholds
+  [ ] 7. Off-topic: re-ask once, then skip that slot and keep going
+  [ ] 8. Out of v1: explain why + Connect to a Nexus expert
+  [ ] 9. Confirm → Test Run → download → Save is the close of the demo
+  [ ] 10. v1 output is file download only (no Slack / email / ERP write-back)
+  [ ] 11. Journey 2 is a test of the engine, not a hardcoded bank-recon product
 
 Owner: __________________    Date: __________    OK / changes needed: __________
 
 
 --------------------------------------------------------------------------------
-QUICK COPY (chat only)
+QUICK COPY (chat only — happy path)
+Wait for each Nexus question. Attach files when asked. Then paste one line at a time.
 --------------------------------------------------------------------------------
 
 I'm a Treasury analyst on the R2R team at a retail company.
@@ -258,4 +314,12 @@ One deposit can cover several receipts. Match them as a group. If cash is left o
 I walk the statement top to bottom: yesterday's balance, plus deposits, minus withdrawals. If my total doesn't match what the bank printed, flag that line.
 Anything uncleared past thirty days is high risk. Cite the Treasury SOP so the reviewer knows why it showed up.
 A PDF audit report for the controller — match summary up front, sign-off at the end. I'll download it here. No Slack.
-That's the process — let's run it.
+
+QUICK COPY (optional retry / skip — after any interview question)
+
+I want pizza
+still pizza
+
+QUICK COPY (optional expert — new session, after files are attached)
+
+Post every result back into SAP as a live posting and ping Slack.
